@@ -696,6 +696,8 @@ static int find_path_entry(const char* abs_path, uint32_t* out_parent_cluster, D
 int fat32_mount(void) {
     uint8_t sector[BLOCKDEV_SECTOR_SIZE];
 
+    memory_set((uint8_t*)&fs, 0, (uint32_t)sizeof(fs));
+
     if (blockdev_read_sector(0, sector) != 0) {
         ERROR_LOG("failed to read FAT32 boot sector");
         return -1;
@@ -734,6 +736,10 @@ int fat32_mount(void) {
 
 int fat32_is_mounted(void) {
     return fs.mounted;
+}
+
+void fat32_unmount(void) {
+    fs.mounted = 0;
 }
 
 int fat32_list_dir(const char* abs_path, fat32_list_visitor_t visitor, void* context) {

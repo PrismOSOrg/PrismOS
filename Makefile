@@ -7,13 +7,16 @@ LDFLAGS=-m32 -T boot/linker.ld -ffreestanding -nostdlib -no-pie -Wl,--build-id=n
 
 BUILD=build
 ISO_DIR=$(BUILD)/isodir
+DISK_MOUNT_POINT ?= $(BUILD)/disk-mnt
 
 QEMU=qemu-system-x86_64
+QEMU_DISK_IMAGE ?= $(BUILD)/disk.img
+QEMU_DISK_FORMAT ?= raw
 QEMU_FLAGS=-boot order=d -cdrom $(BUILD)/os.iso \
-	-drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk \
+	-drive file=$(QEMU_DISK_IMAGE),format=$(QEMU_DISK_FORMAT),if=ide,index=0,media=disk \
 	-monitor none
 
-.PHONY: all run run-serial run-serial-log prismcc clean
+.PHONY: all run run-serial run-serial-log run-vhdx check-disk-unmounted mount-disk unmount-disk mount-vhdx unmount-vhdx prismcc clean
 
 all: os.iso
 
@@ -55,6 +58,7 @@ $(BUILD)/paging.o
 
 FS_OBJS = \
 $(BUILD)/blockdev.o \
+$(BUILD)/partition_manager.o \
 $(BUILD)/fat32.o \
 $(BUILD)/vfs.o
 
@@ -152,26 +156,57 @@ os.iso: kernel.elf boot/grub.cfg
 # -------------------------
 $(BUILD)/disk.img:
 	truncate -s 64M $@
+	printf 'label: dos\nunit: sectors\n\nstart=2048, size=129024, type=c, bootable\n' | sfdisk $@
+	mkfs.fat -F 32 -n PRISMOS --offset=2048 $@
+
+$(BUILD)/disk.vhdx: $(BUILD)/disk.img
+	qemu-img convert -f raw -O vhdx $< $@
 
 # -------------------------
 # RUN (NO KVM)
 # -------------------------
-run: os.iso $(BUILD)/disk.img
+check-disk-unmounted:
+	@if mountpoint -q "$(DISK_MOUNT_POINT)" || find "$(BUILD)" -type f -name '*.qemu-nbd-state' -print -quit 2>/dev/null | grep -q .; then \
+		echo "Disk image is mounted on the host; run make unmount-disk first." >&2; \
+		exit 1; \
+	fi
+
+run: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
 	$(QEMU) $(QEMU_FLAGS)
 
-run-serial: os.iso $(BUILD)/disk.img
+run-serial: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
 	$(QEMU) $(QEMU_FLAGS) -serial stdio
 
-run-serial-log: os.iso $(BUILD)/disk.img
+run-serial-log: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
 	$(QEMU) $(QEMU_FLAGS) -serial file:$(BUILD)/serial.log
+
+run-vhdx: QEMU_DISK_IMAGE=$(BUILD)/disk.vhdx
+run-vhdx: QEMU_DISK_FORMAT=vhdx
+run-vhdx: check-disk-unmounted os.iso $(BUILD)/disk.vhdx
+	$(QEMU) $(QEMU_FLAGS)
+
+# -------------------------
+# HOST IMAGE ACCESS
+# -------------------------
+mount-disk: $(QEMU_DISK_IMAGE)
+	sudo bash tools/mount-disk-image.sh mount "$(QEMU_DISK_IMAGE)" "$(QEMU_DISK_FORMAT)" "$(DISK_MOUNT_POINT)" 1
+
+unmount-disk:
+	sudo bash tools/mount-disk-image.sh unmount "$(DISK_MOUNT_POINT)"
+
+mount-vhdx: $(BUILD)/disk.vhdx
+	sudo bash tools/mount-disk-image.sh mount "$(BUILD)/disk.vhdx" vhdx "$(DISK_MOUNT_POINT)" 1
+
+unmount-vhdx:
+	sudo bash tools/mount-disk-image.sh unmount "$(DISK_MOUNT_POINT)"
 
 # -------------------------
 # RUN (KVM - FAST)
 # -------------------------
-run-kvm: os.iso $(BUILD)/disk.img
+run-kvm: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
 	$(QEMU) $(QEMU_FLAGS) -enable-kvm -cpu host -m 512M
 
-run-kvm-serial: os.iso $(BUILD)/disk.img
+run-kvm-serial: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
 	$(QEMU) $(QEMU_FLAGS) -enable-kvm -cpu host -m 512M -serial stdio
 
 # -------------------------
@@ -181,4 +216,8 @@ prismcc: tools/prismcc.c src/apps/app_format.h | $(BUILD)
 	gcc -O2 -Wall -Wextra -Isrc $< -o $(BUILD)/prismcc
 
 clean:
+	@if mountpoint -q "$(DISK_MOUNT_POINT)" || find "$(BUILD)" -type f -name '*.qemu-nbd-state' -print -quit 2>/dev/null | grep -q .; then \
+		echo "Disk image is mounted on the host; unmount it before make clean." >&2; \
+		exit 1; \
+	fi
 	rm -rf $(BUILD)

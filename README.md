@@ -7,7 +7,7 @@ PrismOS is a small hobby operating system that boots via GRUB and runs on x86 ha
 Install the build dependencies (example for Debian/Ubuntu):
 
 ```shell
-sudo apt-get install build-essential nasm gcc-multilib xorriso qemu-system-x86 grub-common grub-pc-bin mtools
+sudo apt-get install build-essential nasm gcc-multilib xorriso qemu-system-x86 qemu-utils grub-common grub-pc-bin mtools dosfstools util-linux
 ```
 
 Build and run:
@@ -22,6 +22,7 @@ Other useful targets:
 make clean         # remove build artifacts
 make run-serial    # boot and mirror COM1 to your terminal
 make run-serial-log # boot and save COM1 output to build/serial.log
+make run-vhdx      # convert the test disk to VHDX and boot it in QEMU
 ```
 
 Notes:
@@ -30,6 +31,49 @@ Notes:
 - `make run-serial` launches QEMU with debug logs. If you are running bare-metal use serial port.
 
 If you want a reproducible cross-toolchain build, replace the host `gcc` invocations with an i686-elf cross-compiler and adjust the Makefile accordingly.
+
+## Disk and partition support
+
+PrismOS probes up to four ATA hard drives on the primary and secondary legacy
+IDE channels, scans MBR primary partitions, and mounts the first valid FAT32
+partition (preferring an active partition). Legacy FAT32 volumes that occupy
+the whole disk are also accepted. Use `drive` to list detected drives and their
+capacities, `partitions` to inspect the current drive, and `drive <index>` to
+switch the mounted drive. Switching drives resets the shell working directory
+to `/`; use `cd` to navigate that drive's filesystem.
+
+Disk discovery is non-destructive: boot no longer formats an unrecognized or
+blank drive. Prepare a FAT32 partition before booting PrismOS, and back up data
+before testing on physical hardware. This initial implementation supports MBR
+and ATA LBA28 addressing; GPT, extended/logical partitions, SATA/AHCI, and
+drives larger than the LBA28 addressable range are not yet supported. The QEMU
+test image is created as an MBR disk with a FAT32 partition; whole-disk FAT32
+images remain supported for compatibility.
+
+QEMU can use VHDX containers without any VHDX parsing in the kernel: QEMU
+exposes the container as the same emulated IDE disk. `make run-vhdx` converts
+the generated raw test disk into `build/disk.vhdx` and boots from it. To attach
+an existing VHDX instead, set `QEMU_DISK_IMAGE` and `QEMU_DISK_FORMAT`, for
+example `make run QEMU_DISK_IMAGE=/path/to/disk.vhdx QEMU_DISK_FORMAT=vhdx`.
+Use a disposable image for testing because PrismOS writes to mounted FAT32
+volumes.
+
+To edit files from the host before booting, mount the image, edit files under
+`build/disk-mnt`, then unmount it before starting QEMU:
+
+```shell
+make mount-disk       # mounts the default raw image
+# edit/copy files under build/disk-mnt
+make unmount-disk
+make run
+```
+
+For the VHDX image, use `make mount-vhdx` and `make unmount-vhdx`, then boot
+with `make run-vhdx`. These mount targets use `qemu-nbd` and `sudo`; the host
+needs NBD and FAT filesystem support. Never run PrismOS on the image while it
+is mounted on the host, and unmount it cleanly first so changes are flushed.
+QEMU run targets and `make clean` refuse to proceed while the default host mount
+is active, to help prevent simultaneous access or accidental data deletion.
 
 
 # Developing and Contributing to PrismOS

@@ -5,7 +5,9 @@
 #include "display/console.h"
 #include "platform/io.h"
 #include "platform/system.h"
+#include "filesystem/blockdev.h"
 #include "filesystem/vfs.h"
+#include "filesystem/partition_manager.h"
 #include "apps/app_manager.h"
 #include "apps/prismcc_runtime.h"
 
@@ -75,6 +77,8 @@ static void command_ide(const char* arguments);
 static void command_app_run(const char* arguments);
 static void command_cc(const char* arguments);
 static void command_mv(const char* arguments);
+static void command_partitions(const char* arguments);
+static void command_drive(const char* arguments);
 
 static char command_cwd[COMMAND_PATH_CAPACITY] = "/";
 
@@ -145,6 +149,8 @@ static const Command commands[] = {
     {"clear", "clear the screen", command_clear},
     {"echo", "print text after the command", command_echo},
     {"about", "show system information and version", command_about},
+    {"partitions", "list partitions and current drive size", command_partitions},
+    {"drive", "list drives or switch active drive: drive <index>", command_drive},
     {"reboot", "reboot the machine", command_reboot},
     {"shutdown", "shut down the machine", command_shutdown},
     {"comport", "send text to COM1 serial port", command_comport},
@@ -219,6 +225,137 @@ static void command_about(const char* arguments) {
     console_write("RAM: ");
     console_write_uint(total_memory_kb / 1024U);
     console_writeln(" MB");
+}
+
+static void command_partitions(const char* arguments) {
+    uint32_t count = partition_manager_count();
+    uint32_t drive_sectors = blockdev_device_sector_count();
+
+    (void)arguments;
+    console_write("Drive ");
+    console_write_uint(blockdev_current_drive());
+    console_write(" total size: ");
+    console_write_uint(drive_sectors / 2048U);
+    console_write(" MiB (");
+    console_write_uint(drive_sectors);
+    console_writeln(" sectors)");
+
+    if (count == 0U) {
+        console_writeln("No partition table detected");
+        return;
+    }
+
+    console_writeln("Index Type Start LBA Sectors Status");
+    for (uint32_t index = 0; index < count; index++) {
+        partition_info_t partition;
+        if (partition_manager_get(index, &partition) != 0) {
+            continue;
+        }
+
+        console_write_uint(index + 1U);
+        console_write("     ");
+        if (partition_manager_is_superfloppy()) {
+            console_write("FAT32 ");
+        } else {
+            console_write_uint(partition.type);
+            console_write("    ");
+        }
+        console_write_uint(partition.start_sector);
+        console_write("    ");
+        console_write_uint(partition.sector_count);
+        console_write("    ");
+        if (!partition.valid) {
+            console_writeln("invalid");
+        } else if (partition.is_selected) {
+            console_writeln("mounted");
+        } else {
+            console_writeln("available");
+        }
+    }
+}
+
+static int parse_drive_index(const char* text, uint32_t* out_index) {
+    uint32_t value = 0;
+
+    if (*text == '\0') {
+        return -1;
+    }
+
+    while (*text != '\0') {
+        if (*text < '0' || *text > '9') {
+            return -1;
+        }
+
+        if (value > (0xFFFFFFFFU - (uint32_t)(*text - '0')) / 10U) {
+            return -1;
+        }
+
+        value = value * 10U + (uint32_t)(*text - '0');
+        text++;
+    }
+
+    *out_index = value;
+    return 0;
+}
+
+static void command_drive(const char* arguments) {
+    const char* input = skip_spaces(arguments);
+    char token[COMMAND_TOKEN_CAPACITY];
+    const char* remainder = 0;
+
+    if (*input == '\0') {
+        uint32_t count = blockdev_drive_count();
+        if (count == 0U) {
+            console_writeln("No ATA hard drives detected");
+            return;
+        }
+
+        console_writeln("Drive Size Status");
+        for (uint32_t index = 0; index < count; index++) {
+            blockdev_drive_info_t info;
+            if (blockdev_get_drive_info(index, &info) != 0) {
+                continue;
+            }
+
+            console_write("Drive ");
+            console_write_uint(index);
+            console_write(" ");
+            console_write_uint(info.sector_count / 2048U);
+            console_write(" MiB (");
+            console_write_uint(info.sector_count);
+            console_write(" sectors) ");
+            console_writeln(index == blockdev_current_drive() ? "current" : "available");
+        }
+        console_writeln("Use: drive <index>");
+        return;
+    }
+
+    if (parse_token(input, token, sizeof(token), &remainder) != 0 || *remainder != '\0') {
+        console_writeln("Usage: drive [index]");
+        return;
+    }
+
+    uint32_t selected_drive;
+    if (parse_drive_index(token, &selected_drive) != 0 ||
+        blockdev_select_drive(selected_drive) != 0) {
+        console_writeln("Drive index not found");
+        return;
+    }
+
+    vfs_unmount();
+    command_cwd[0] = '/';
+    command_cwd[1] = '\0';
+
+    if (partition_manager_init() != 0 || vfs_init() != 0) {
+        console_write("Drive ");
+        console_write_uint(selected_drive);
+        console_writeln(" selected, but no supported FAT32 volume was found");
+        return;
+    }
+
+    console_write("Switched to drive ");
+    console_write_uint(selected_drive);
+    console_writeln(" at /");
 }
 
 static void command_reboot(const char* arguments) {

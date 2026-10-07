@@ -170,6 +170,10 @@ int vfs_init(void) {
     return fat32_mount();
 }
 
+void vfs_unmount(void) {
+    fat32_unmount();
+}
+
 int vfs_path_is_dir(const char* abs_path, int* out_is_dir) {
     return fat32_path_is_dir(abs_path, out_is_dir);
 }

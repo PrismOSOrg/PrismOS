@@ -13,6 +13,7 @@ typedef int (*fat32_list_visitor_t)(const fat32_dir_entry_t* entry, void* contex
 
 int fat32_mount(void);
 int fat32_is_mounted(void);
+void fat32_unmount(void);
 int fat32_list_dir(const char* abs_path, fat32_list_visitor_t visitor, void* context);
 int fat32_touch_file(const char* abs_path);
 int fat32_write_file(const char* abs_path, const char* data, uint32_t size, int append);

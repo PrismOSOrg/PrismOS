@@ -10,6 +10,7 @@
 #include "memory/pmm.h"
 #include "memory/paging.h"
 #include "filesystem/blockdev.h"
+#include "filesystem/partition_manager.h"
 #include "filesystem/vfs.h"
 #include "apps/app_manager.h"
 
@@ -165,6 +166,9 @@ void main(void) {
     if (blockdev_init_disk() != 0) {
         ERROR_LOG("storage init failed");
         console_writeln("Storage initialization failed");
+    } else if (partition_manager_init() != 0) {
+        ERROR_LOG("partition scan failed");
+        console_writeln("No supported FAT32 partition found");
     } else if (vfs_init() != 0) {
         ERROR_LOG("filesystem init failed");
         console_writeln("Filesystem initialization failed");

@@ -13,6 +13,7 @@ typedef int (*vfs_list_visitor_t)(const vfs_entry_t* entry, void* context);
 
 /* VFS keeps the shell-side path handling simple and maps everything onto FAT32. */
 int vfs_init(void);
+void vfs_unmount(void);
 int vfs_normalize_path(const char* cwd, const char* input, char* out, uint32_t out_capacity);
 int vfs_path_is_dir(const char* abs_path, int* out_is_dir);
 int vfs_list(const char* path, vfs_list_visitor_t visitor, void* context);
