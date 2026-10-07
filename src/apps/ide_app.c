@@ -8,6 +8,7 @@
 #include "filesystem/vfs.h"
 #include "input/keyboard.h"
 #include "util/string.h"
+#include "util/clipboard.h"
 
 #define IDE_MAX_TEXT (16U * 1024U)
 #define IDE_MAX_PATH 128U
@@ -19,6 +20,7 @@ typedef struct {
     char text[IDE_MAX_TEXT + 1U];
     uint32_t length;
     uint32_t cursor;
+    uint32_t selection_anchor;
     uint32_t preferred_col;
     uint32_t scroll_row;
     int modified;
@@ -66,6 +68,10 @@ static uint32_t editor_rows(void) {
     }
 
     return height / 16U;
+}
+
+static int editor_is_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n';
 }
 
 static uint32_t line_start_for_index(const EditorState* state, uint32_t index) {
@@ -152,6 +158,17 @@ static int ensure_cursor_visible(EditorState* state, uint32_t row) {
 }
 
 static void editor_insert(EditorState* state, char c) {
+    if (state->selection_anchor != 0xFFFFFFFFU) {
+        uint32_t start = state->selection_anchor < state->cursor ? state->selection_anchor : state->cursor;
+        uint32_t end = state->selection_anchor > state->cursor ? state->selection_anchor : state->cursor;
+        for (uint32_t i = end; i <= state->length; i++) {
+            state->text[start + i - end] = state->text[i];
+        }
+        state->length -= end - start;
+        state->cursor = start;
+        state->selection_anchor = 0xFFFFFFFFU;
+    }
+
     if (state->length >= IDE_MAX_TEXT || state->cursor > state->length) {
         return;
     }
@@ -340,6 +357,19 @@ static void editor_insert_newline_with_indent(EditorState* state) {
 }
 
 static void editor_backspace(EditorState* state) {
+    if (state->selection_anchor != 0xFFFFFFFFU && state->selection_anchor != state->cursor) {
+        uint32_t start = state->selection_anchor < state->cursor ? state->selection_anchor : state->cursor;
+        uint32_t end = state->selection_anchor > state->cursor ? state->selection_anchor : state->cursor;
+        for (uint32_t i = end; i <= state->length; i++) {
+            state->text[start + i - end] = state->text[i];
+        }
+        state->length -= end - start;
+        state->cursor = start;
+        state->selection_anchor = 0xFFFFFFFFU;
+        state->modified = 1;
+        return;
+    }
+
     if (state->cursor == 0U || state->length == 0U) {
         return;
     }
@@ -355,6 +385,11 @@ static void editor_backspace(EditorState* state) {
 }
 
 static void editor_delete(EditorState* state) {
+    if (state->selection_anchor != 0xFFFFFFFFU && state->selection_anchor != state->cursor) {
+        editor_backspace(state);
+        return;
+    }
+
     if (state->cursor >= state->length || state->length == 0U) {
         return;
     }
@@ -403,15 +438,29 @@ static void editor_move_vertical(EditorState* state, int direction) {
     state->cursor = target_start + target_col;
 }
 
-static void editor_move_left(EditorState* state) {
-    if (state->cursor > 0U) {
+static void editor_move_left(EditorState* state, int word) {
+    if (word) {
+        while (state->cursor > 0U && editor_is_space(state->text[state->cursor - 1U])) {
+            state->cursor--;
+        }
+        while (state->cursor > 0U && state->text[state->cursor - 1U] != ' ') {
+            state->cursor--;
+        }
+    } else if (state->cursor > 0U) {
         state->cursor--;
     }
     state->preferred_col = column_for_index(state, state->cursor);
 }
 
-static void editor_move_right(EditorState* state) {
-    if (state->cursor < state->length) {
+static void editor_move_right(EditorState* state, int word) {
+    if (word) {
+        while (state->cursor < state->length && editor_is_space(state->text[state->cursor])) {
+            state->cursor++;
+        }
+        while (state->cursor < state->length && state->text[state->cursor] != ' ') {
+            state->cursor++;
+        }
+    } else if (state->cursor < state->length) {
         state->cursor++;
     }
     state->preferred_col = column_for_index(state, state->cursor);
@@ -426,6 +475,32 @@ static void editor_move_end(EditorState* state) {
     uint32_t start = line_start_for_index(state, state->cursor);
     state->cursor = line_end_for_start(state, start);
     state->preferred_col = column_for_index(state, state->cursor);
+}
+
+static void editor_copy_selection(EditorState* state) {
+    uint32_t start;
+    uint32_t end;
+
+    if (state->selection_anchor == 0xFFFFFFFFU || state->selection_anchor == state->cursor) {
+        return;
+    }
+
+    start = state->selection_anchor < state->cursor ? state->selection_anchor : state->cursor;
+    end = state->selection_anchor > state->cursor ? state->selection_anchor : state->cursor;
+    clipboard_set(&state->text[start], end - start);
+}
+
+static void editor_paste_clipboard(EditorState* state) {
+    uint32_t length = clipboard_length();
+    const char* data = clipboard_data();
+
+    if (state->selection_anchor != 0xFFFFFFFFU && state->selection_anchor != state->cursor) {
+        editor_backspace(state);
+    }
+
+    for (uint32_t i = 0; i < length; i++) {
+        editor_insert(state, data[i]);
+    }
 }
 
 static void draw_title_bar(const EditorState* state) {
@@ -847,6 +922,29 @@ static void draw_text_area(EditorState* state, uint32_t columns, uint32_t rows, 
     }
 }
 
+static void draw_selection(EditorState* state, uint32_t columns, uint32_t rows) {
+    uint32_t start;
+    uint32_t end;
+
+    if (state->selection_anchor == 0xFFFFFFFFU || state->selection_anchor == state->cursor) {
+        return;
+    }
+
+    start = state->selection_anchor < state->cursor ? state->selection_anchor : state->cursor;
+    end = state->selection_anchor > state->cursor ? state->selection_anchor : state->cursor;
+    console_set_color(COLOR_BLACK, COLOR_LIGHT_GRAY);
+    for (uint32_t i = start; i < end; i++) {
+        uint32_t row;
+        uint32_t col;
+        cursor_metrics_for_index(state, i, &row, &col);
+        if (state->text[i] != '\n' && row >= state->scroll_row && row - state->scroll_row < rows - 2U && col < columns) {
+            console_set_cursor((int)col, (int)(row - state->scroll_row + 1U));
+            console_write_char(state->text[i]);
+        }
+    }
+    console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
+}
+
 static void draw_editor(EditorState* state, int text_dirty) {
     uint32_t columns = editor_columns();
     uint32_t rows = editor_rows();
@@ -889,6 +987,8 @@ static void draw_editor(EditorState* state, int text_dirty) {
         state->prev_cursor_row = cursor_row;
         state->prev_cursor_col = cursor_col;
     }
+
+    draw_selection(state, columns, rows);
 
     // cursor draw
     if (cursor_row >= state->scroll_row) {
@@ -1074,6 +1174,7 @@ int ide_app_run(const char* abs_path) {
     copy_limited(state.path, sizeof(state.path), abs_path);
     state.length = 0;
     state.cursor = 0;
+    state.selection_anchor = 0xFFFFFFFFU;
     state.preferred_col = 0;
     state.scroll_row = 0;
     state.modified = 0;
@@ -1152,22 +1253,50 @@ int ide_app_run(const char* abs_path) {
                 text_dirty = 1;
                 break;
             case KEY_EVENT_LEFT:
-                editor_move_left(&state);
+                if ((event.modifiers & KEY_MOD_SHIFT) != 0U && state.selection_anchor == 0xFFFFFFFFU) {
+                    state.selection_anchor = state.cursor;
+                } else if ((event.modifiers & KEY_MOD_SHIFT) == 0U) {
+                    state.selection_anchor = 0xFFFFFFFFU;
+                }
+                editor_move_left(&state, (event.modifiers & KEY_MOD_CTRL) != 0U);
+                state.full_redraw = 1;
                 break;
             case KEY_EVENT_RIGHT:
-                editor_move_right(&state);
+                if ((event.modifiers & KEY_MOD_SHIFT) != 0U && state.selection_anchor == 0xFFFFFFFFU) {
+                    state.selection_anchor = state.cursor;
+                } else if ((event.modifiers & KEY_MOD_SHIFT) == 0U) {
+                    state.selection_anchor = 0xFFFFFFFFU;
+                }
+                editor_move_right(&state, (event.modifiers & KEY_MOD_CTRL) != 0U);
+                state.full_redraw = 1;
                 break;
             case KEY_EVENT_UP:
+                state.selection_anchor = 0xFFFFFFFFU;
                 editor_move_vertical(&state, -1);
+                state.full_redraw = 1;
                 break;
             case KEY_EVENT_DOWN:
+                state.selection_anchor = 0xFFFFFFFFU;
                 editor_move_vertical(&state, 1);
+                state.full_redraw = 1;
                 break;
             case KEY_EVENT_HOME:
+                state.selection_anchor = 0xFFFFFFFFU;
                 editor_move_home(&state);
+                state.full_redraw = 1;
                 break;
             case KEY_EVENT_END:
+                state.selection_anchor = 0xFFFFFFFFU;
                 editor_move_end(&state);
+                state.full_redraw = 1;
+                break;
+            case KEY_EVENT_COPY:
+                editor_copy_selection(&state);
+                break;
+            case KEY_EVENT_PASTE:
+                editor_paste_clipboard(&state);
+                state.full_redraw = 1;
+                text_dirty = 1;
                 break;
             case KEY_EVENT_NONE:
             default:

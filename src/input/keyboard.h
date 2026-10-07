@@ -1,6 +1,8 @@
 #ifndef PRISMOS_KEYBOARD_H
 #define PRISMOS_KEYBOARD_H
 
+#include <stdint.h>
+
 typedef enum {
     KEY_EVENT_NONE = 0,
     KEY_EVENT_CHARACTER,
@@ -13,11 +15,17 @@ typedef enum {
     KEY_EVENT_DOWN,
     KEY_EVENT_HOME,
     KEY_EVENT_END,
+    KEY_EVENT_COPY,
+    KEY_EVENT_PASTE,
 } KeyEventType;
+
+#define KEY_MOD_SHIFT 0x01U
+#define KEY_MOD_CTRL  0x02U
 
 typedef struct {
     KeyEventType type;
     char character;
+    uint8_t modifiers;
 } KeyEvent;
 
 /* Registers the keyboard IRQ handler (IRQ1) and unmasks the IRQ line.

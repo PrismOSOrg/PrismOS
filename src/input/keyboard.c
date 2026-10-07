@@ -1,5 +1,6 @@
 #include "keyboard.h"
 
+#include "comport/comport.h"
 #include "interrupts/irq.h"
 #include "platform/io.h"
 #include "platform/pic.h"
@@ -72,6 +73,7 @@ static void keyboard_irq_handler(registers_t *regs)
 
     static int extended_prefix = 0;
     static int shift_pressed   = 0;
+    static int ctrl_pressed    = 0;
     static int caps_lock       = 0;
     static int first_invocation = 1;
 
@@ -99,13 +101,18 @@ static void keyboard_irq_handler(registers_t *regs)
         if (key == 42 || key == 54) { /* left/right shift */
             shift_pressed = 0;
         }
+        if (key == 29) { /* left/right control */
+            ctrl_pressed = 0;
+        }
         extended_prefix = 0;
         return;
     }
 
     if (extended_prefix) {
         extended_prefix = 0;
-        KeyEvent ev = {KEY_EVENT_NONE, 0};
+        KeyEvent ev = {KEY_EVENT_NONE, 0, 0};
+        ev.modifiers = (uint8_t)((shift_pressed ? KEY_MOD_SHIFT : 0U)
+            | (ctrl_pressed ? KEY_MOD_CTRL : 0U));
         switch (scancode) {
             case 0x48: ev.type = KEY_EVENT_UP;     break;
             case 0x50: ev.type = KEY_EVENT_DOWN;   break;
@@ -121,19 +128,32 @@ static void keyboard_irq_handler(registers_t *regs)
     }
 
     if (scancode == 42 || scancode == 54) { shift_pressed = 1; return; }
+    if (scancode == 29) { ctrl_pressed = 1; return; }
     if (scancode == 58) { caps_lock = !caps_lock; return; }
-    if (scancode == 14) { kb_queue_push((KeyEvent){KEY_EVENT_BACKSPACE, 0}); return; }
-    if (scancode == 28) { kb_queue_push((KeyEvent){KEY_EVENT_ENTER,     0}); return; }
+    if (scancode == 14) { kb_queue_push((KeyEvent){KEY_EVENT_BACKSPACE, 0, 0}); return; }
+    if (scancode == 28) { kb_queue_push((KeyEvent){KEY_EVENT_ENTER, 0, 0}); return; }
     if (scancode >= 128 || keyboard_map[scancode] == 0) { return; }
 
     char character = shift_pressed ? keyboard_shift_map[scancode] : keyboard_map[scancode];
+
+    if (ctrl_pressed && (character == 'c' || character == 'C')) {
+        kb_queue_push((KeyEvent){KEY_EVENT_COPY, 0, KEY_MOD_CTRL});
+        return;
+    }
+
+    if (ctrl_pressed && (character == 'v' || character == 'V')) {
+        kb_queue_push((KeyEvent){KEY_EVENT_PASTE, 0, KEY_MOD_CTRL});
+        return;
+    }
     if (caps_lock && character >= 'a' && character <= 'z') {
         character = (char)(character - 'a' + 'A');
     } else if (caps_lock && character >= 'A' && character <= 'Z') {
         character = (char)(character - 'A' + 'a');
     }
 
-    kb_queue_push((KeyEvent){KEY_EVENT_CHARACTER, character});
+    kb_queue_push((KeyEvent){KEY_EVENT_CHARACTER, character,
+        (uint8_t)((shift_pressed ? KEY_MOD_SHIFT : 0U)
+            | (ctrl_pressed ? KEY_MOD_CTRL : 0U))});
 }
 
 /* -------------------------------------------------------------------------
@@ -148,10 +168,26 @@ void keyboard_init(void)
     pic_unmask_irq(1);
 }
 
+static KeyEvent keyboard_serial_event(int character) {
+    if (character == '\r' || character == '\n') {
+        return (KeyEvent){KEY_EVENT_ENTER, 0, 0};
+    }
+
+    if (character == '\b' || character == 0x7FU) {
+        return (KeyEvent){KEY_EVENT_BACKSPACE, 0, 0};
+    }
+
+    return (KeyEvent){KEY_EVENT_CHARACTER, (char)character, 0};
+}
+
 KeyEvent keyboard_read_event(void)
 {
     /* Sleep with 'hlt' until the IRQ handler deposits an event. */
     while (kb_queue_empty()) {
+        int serial_character = comport_poll_char();
+        if (serial_character >= 0) {
+            return keyboard_serial_event(serial_character);
+        }
         __asm__ volatile("hlt");
     }
     return kb_queue_pop();
@@ -160,7 +196,12 @@ KeyEvent keyboard_read_event(void)
 KeyEvent keyboard_poll_event(void)
 {
     if (kb_queue_empty()) {
-        return (KeyEvent){KEY_EVENT_NONE, 0};
+        int serial_character = comport_poll_char();
+        if (serial_character >= 0) {
+            return keyboard_serial_event(serial_character);
+        }
+
+        return (KeyEvent){KEY_EVENT_NONE, 0, 0};
     }
 
     return kb_queue_pop();

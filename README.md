@@ -25,6 +25,11 @@ make run-serial-log # boot and save COM1 output to build/serial.log
 make run-vhdx      # convert the test disk to VHDX and boot it in QEMU
 ```
 
+Clipboard sharing:
+- Use `make run-serial` when launching PrismOS from a terminal. Pasting into that terminal sends host text to the guest through COM1.
+- `Ctrl+C` on a selection publishes the guest text with OSC 52; terminals that support OSC 52 can place it on the host clipboard.
+- The regular QEMU graphical window does not provide native clipboard sharing yet. That requires a guest-side SPICE/virtio clipboard protocol, which PrismOS does not currently implement.
+
 Notes:
 - The build uses 32-bit compilation flags (gcc -m32). Ensure you have multilib support installed.
 - `make run` launches QEMU for quick testing; you can also boot `build/os.iso` in a BIOS-mode VM.

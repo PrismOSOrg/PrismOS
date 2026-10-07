@@ -4,6 +4,7 @@
 #include "debug/log.h"
 #include "display/console.h"
 #include "input/keyboard.h"
+#include "util/clipboard.h"
 
 #define SHELL_PROMPT "PrismOS> "
 #define SHELL_HISTORY_SIZE 16
@@ -19,9 +20,10 @@ typedef struct {
     int history_count;
     int history_index;
     int prompt_row;
+    int selection_anchor;
 } ShellState;
 
-static ShellState shell = {{0}, 0, 0, {0}, 0, {{0}}, 0, -1, 0};
+static ShellState shell = {{0}, 0, 0, {0}, 0, {{0}}, 0, -1, 0, -1};
 
 static int string_length(const char* text) {
     int length = 0;
@@ -68,6 +70,64 @@ static void shell_set_line(const char* text) {
     shell_copy_line(shell.line, text, SHELL_MAX_INPUT);
     shell.length = string_length(shell.line);
     shell.cursor = shell.length;
+    shell.selection_anchor = -1;
+}
+
+static void shell_clear_selection(void) {
+    shell.selection_anchor = -1;
+}
+
+static void shell_insert_char(char c);
+
+static int shell_selection_start(void) {
+    return shell.selection_anchor < shell.cursor ? shell.selection_anchor : shell.cursor;
+}
+
+static int shell_selection_end(void) {
+    return shell.selection_anchor > shell.cursor ? shell.selection_anchor : shell.cursor;
+}
+
+static int shell_has_selection(void) {
+    return shell.selection_anchor >= 0 && shell.selection_anchor != shell.cursor;
+}
+
+static void shell_delete_selection(void) {
+    int start;
+    int end;
+
+    if (!shell_has_selection()) {
+        return;
+    }
+
+    start = shell_selection_start();
+    end = shell_selection_end();
+    for (int index = end; index <= shell.length; index++) {
+        shell.line[start + index - end] = shell.line[index];
+    }
+    shell.length -= end - start;
+    shell.cursor = start;
+    shell_clear_selection();
+}
+
+static void shell_copy_selection(void) {
+    if (shell_has_selection()) {
+        clipboard_set(&shell.line[shell_selection_start()],
+            (uint32_t)(shell_selection_end() - shell_selection_start()));
+    }
+}
+
+static void shell_paste_clipboard(void) {
+    uint32_t paste_length = clipboard_length();
+    const char* paste_data = clipboard_data();
+
+    shell_delete_selection();
+    if (paste_length > (uint32_t)(SHELL_MAX_INPUT - shell.length)) {
+        paste_length = (uint32_t)(SHELL_MAX_INPUT - shell.length);
+    }
+
+    for (uint32_t index = 0; index < paste_length; index++) {
+        shell_insert_char(paste_data[index]);
+    }
 }
 
 static void shell_render_input(void) {
@@ -79,6 +139,16 @@ static void shell_render_input(void) {
     console_write(cwd);
     console_write("> ");
     console_write(shell.line);
+    if (shell_has_selection()) {
+        int start = shell_selection_start();
+        int end = shell_selection_end();
+        console_set_color(COLOR_BLACK, COLOR_LIGHT_GRAY);
+        for (int index = start; index < end; index++) {
+            console_set_cursor((int)string_length(cwd) + 2 + index, shell.prompt_row);
+            console_write_char(shell.line[index]);
+        }
+        console_set_color(COLOR_WHITE, COLOR_BLACK);
+    }
     console_set_cursor((int)string_length(cwd) + 2 + shell.cursor, shell.prompt_row);
 }
 
@@ -87,6 +157,8 @@ static void shell_refresh_line(void) {
 }
 
 static void shell_insert_char(char c) {
+    shell_delete_selection();
+
     if (shell.length >= SHELL_MAX_INPUT) {
         return;
     }
@@ -99,10 +171,17 @@ static void shell_insert_char(char c) {
     shell.length++;
     shell.cursor++;
     shell.line[shell.length] = '\0';
+    shell_clear_selection();
     shell_refresh_line();
 }
 
 static void shell_backspace(void) {
+    if (shell_has_selection()) {
+        shell_delete_selection();
+        shell_refresh_line();
+        return;
+    }
+
     if (shell.cursor <= 0) {
         return;
     }
@@ -118,6 +197,12 @@ static void shell_backspace(void) {
 }
 
 static void shell_delete_at_cursor(void) {
+    if (shell_has_selection()) {
+        shell_delete_selection();
+        shell_refresh_line();
+        return;
+    }
+
     if (shell.cursor >= shell.length) {
         return;
     }
@@ -131,26 +216,54 @@ static void shell_delete_at_cursor(void) {
     shell_refresh_line();
 }
 
-static void shell_move_cursor_left(void) {
-    if (shell.cursor > 0) {
-        shell.cursor--;
-        shell_refresh_line();
+static void shell_move_cursor_left(int shift, int word) {
+    if (shift && shell.selection_anchor < 0) {
+        shell.selection_anchor = shell.cursor;
+    } else if (!shift) {
+        shell_clear_selection();
     }
+
+    if (word) {
+        while (shell.cursor > 0 && shell.line[shell.cursor - 1] == ' ') {
+            shell.cursor--;
+        }
+        while (shell.cursor > 0 && shell.line[shell.cursor - 1] != ' ') {
+            shell.cursor--;
+        }
+    } else if (shell.cursor > 0) {
+        shell.cursor--;
+    }
+    shell_refresh_line();
 }
 
-static void shell_move_cursor_right(void) {
-    if (shell.cursor < shell.length) {
-        shell.cursor++;
-        shell_refresh_line();
+static void shell_move_cursor_right(int shift, int word) {
+    if (shift && shell.selection_anchor < 0) {
+        shell.selection_anchor = shell.cursor;
+    } else if (!shift) {
+        shell_clear_selection();
     }
+
+    if (word) {
+        while (shell.cursor < shell.length && shell.line[shell.cursor] == ' ') {
+            shell.cursor++;
+        }
+        while (shell.cursor < shell.length && shell.line[shell.cursor] != ' ') {
+            shell.cursor++;
+        }
+    } else if (shell.cursor < shell.length) {
+        shell.cursor++;
+    }
+    shell_refresh_line();
 }
 
 static void shell_move_cursor_home(void) {
+    shell_clear_selection();
     shell.cursor = 0;
     shell_refresh_line();
 }
 
 static void shell_move_cursor_end(void) {
+    shell_clear_selection();
     shell.cursor = shell.length;
     shell_refresh_line();
 }
@@ -217,6 +330,7 @@ static void shell_show_prompt(void) {
     shell.line[0] = '\0';
     shell.length = 0;
     shell.cursor = 0;
+    shell_clear_selection();
     shell_reset_history_navigation();
     console_clear_row(shell.prompt_row);
     console_set_cursor(0, shell.prompt_row);
@@ -257,10 +371,12 @@ static void shell_handle_event(KeyEvent event) {
             shell_delete_at_cursor();
             break;
         case KEY_EVENT_LEFT:
-            shell_move_cursor_left();
+            shell_move_cursor_left((event.modifiers & KEY_MOD_SHIFT) != 0U,
+                (event.modifiers & KEY_MOD_CTRL) != 0U);
             break;
         case KEY_EVENT_RIGHT:
-            shell_move_cursor_right();
+            shell_move_cursor_right((event.modifiers & KEY_MOD_SHIFT) != 0U,
+                (event.modifiers & KEY_MOD_CTRL) != 0U);
             break;
         case KEY_EVENT_UP:
             shell_history_up();
@@ -273,6 +389,13 @@ static void shell_handle_event(KeyEvent event) {
             break;
         case KEY_EVENT_END:
             shell_move_cursor_end();
+            break;
+        case KEY_EVENT_COPY:
+            shell_copy_selection();
+            break;
+        case KEY_EVENT_PASTE:
+            shell_paste_clipboard();
+            shell_refresh_line();
             break;
         case KEY_EVENT_NONE:
         default:

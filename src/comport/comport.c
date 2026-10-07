@@ -92,6 +92,14 @@ static char serial_read(void) {
     return (char)ringbuf_pop(&rx_buf);
 }
 
+int comport_poll_char(void) {
+    if (ringbuf_empty(&rx_buf)) {
+        return -1;
+    }
+
+    return (unsigned char)ringbuf_pop(&rx_buf);
+}
+
 void comport_write_char(char c) {
     while (!serial_transmit_empty());
     outb(PORT, c);

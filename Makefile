@@ -38,7 +38,8 @@ $(BUILD)/log.o \
 $(BUILD)/shell.o \
 $(BUILD)/command.o \
 $(BUILD)/font_psf.o \
-$(BUILD)/string.o
+$(BUILD)/string.o \
+$(BUILD)/clipboard.o
 
 # -------------------------
 # Systems
