@@ -9,6 +9,7 @@
 #include "filesystem/vfs.h"
 #include "filesystem/partition_manager.h"
 #include "apps/app_manager.h"
+#include "apps/help_app.h"
 #include "apps/prismcc_runtime.h"
 
 #define COMMAND_PATH_CAPACITY 128
@@ -19,8 +20,7 @@
 typedef void (*CommandHandler)(const char* arguments);
 
 typedef struct {
-    const char* name;
-    const char* description;
+    command_help_entry_t help;
     CommandHandler handler;
 } Command;
 
@@ -145,37 +145,37 @@ static int resolve_to_absolute_path(const char* input_path, char* output_path, u
 
 // One registry powers execution and help output, so adding commands stays local.
 static const Command commands[] = {
-    {"help", "show this message", command_help},
-    {"clear", "clear the screen", command_clear},
-    {"echo", "print text after the command", command_echo},
-    {"about", "show system information and version", command_about},
-    {"partitions", "list partitions and current drive size", command_partitions},
-    {"drive", "list drives or switch active drive: drive <index>", command_drive},
-    {"reboot", "reboot the machine", command_reboot},
-    {"shutdown", "shut down the machine", command_shutdown},
-    {"comport", "send text to COM1 serial port", command_comport},
-    {"ls", "list directory contents", command_ls},
-    {"cd", "change current directory", command_cd},
-    {"touch", "create an empty file", command_touch},
-    {"mkdir", "create a directory", command_mkdir},
-    {"rm", "remove a file", command_rm},
-    {"rmdir", "remove an empty directory", command_rmdir},
-    {"delete", "remove file or empty directory", command_delete},
-    {"cat", "print file contents", command_cat},
-    {"write", "overwrite file with text", command_write},
-    {"append", "append text to file", command_append},
-    {"mv", "move file from source path to destination path", command_mv},
-    {"edit", "open text editor application", command_edit},
-    {"app-run", "run app package path [args]", command_app_run},
-    {"cc", "compile subset C source to app", command_cc},
-    {"ide", "open integrated development environment application", command_ide},
+    {{"about", "Shows the PrismOS version, execution mode, and detected memory information.", "about", "None.", "about"}, command_about},
+    {{"app-run", "Loads and runs a Prism app package from the active drive. Optional trailing text is passed to the app runtime.", "app-run <path> [args]", "path: app package path. args: optional argument text passed to the app.", "app-run /APPS/BANK.APP"}, command_app_run},
+    {{"append", "Adds text to the end of an existing file. The text is stored as provided; this command does not add a newline.", "append <path> <text>", "path: destination file path. text: all remaining text after the path token.", "append /NOTES.TXT More text"}, command_append},
+    {{"cat", "Reads a text file and prints its contents. Output is limited by the shell command's text buffer.", "cat <path>", "path: file path to read.", "cat /README.TXT"}, command_cat},
+    {{"cc", "Compiles PrismOS's supported subset of C source into a Prism app package on the active drive.", "cc <input.c> <output.app>", "input.c: source file path. output.app: destination package path.", "cc /HELLO.C /HELLO.APP"}, command_cc},
+    {{"cd", "Changes the shell's current directory. Relative paths resolve from the current directory; drive switching returns to the root.", "cd <path>", "path: existing directory path.", "cd /DATA"}, command_cd},
+    {{"clear", "Clears the visible console without changing the current directory or filesystem state.", "clear", "None.", "clear"}, command_clear},
+    {{"comport", "Sends a line of text through the COM1 serial port, useful for external serial terminals and diagnostics.", "comport <text>", "text: message to transmit; spaces are included.", "comport test message"}, command_comport},
+    {{"delete", "Removes a file or an empty directory. Non-empty directories cannot be removed.", "delete <path>", "path: existing file or empty directory path.", "delete /OLD.TXT"}, command_delete},
+    {{"drive", "Lists detected ATA drives and capacities, or switches to a drive and mounts its first supported FAT32 volume.", "drive [index]", "index: optional zero-based drive number shown by drive. Switching resets the current directory to root.", "drive 1"}, command_drive},
+    {{"echo", "Prints the command's remaining text to the console. Useful for quick shell messages.", "echo <text>", "text: message to display; spaces are preserved.", "echo Hello PrismOS"}, command_echo},
+    {{"edit", "Opens a text file in the built-in full-screen editor. Save or exit using the editor's on-screen controls.", "edit <path>", "path: file path to open or create.", "edit /NOTES.TXT"}, command_edit},
+    {{"help", "Opens the interactive command browser, or prints syntax, parameters, and an example for one named command.", "help [command]", "command: optional command name to look up.", "help drive"}, command_help},
+    {{"ide", "Opens the integrated development environment for a source file, with editing and PrismCC build controls.", "ide <path>", "path: source file path to open in the IDE.", "ide /HELLO.C"}, command_ide},
+    {{"ls", "Lists files and subdirectories in the current directory or in a specified path, including file sizes.", "ls [path]", "path: optional directory path; defaults to the current directory.", "ls /DATA"}, command_ls},
+    {{"mkdir", "Creates a new directory at the given path on the active FAT32 volume.", "mkdir <path>", "path: directory path to create; its parent directory must already exist.", "mkdir /DOCS"}, command_mkdir},
+    {{"mv", "Moves or renames a file by copying it and then removing the source. Directory moves are not supported; file size is limited by the move buffer.", "mv <source> <destination>", "source: existing file path. destination: new file path; it must not be a directory.", "mv /OLD.TXT /NEW.TXT"}, command_mv},
+    {{"partitions", "Shows the active drive's total capacity and its detected MBR primary partition entries, including the mounted FAT32 volume.", "partitions", "None.", "partitions"}, command_partitions},
+    {{"reboot", "Immediately restarts the computer or emulator. Unsaved filesystem or editor changes may be lost.", "reboot", "None.", "reboot"}, command_reboot},
+    {{"rm", "Removes a file from the active FAT32 volume. Use rmdir for an empty directory.", "rm <path>", "path: existing file path; directories are not accepted.", "rm /OLD.TXT"}, command_rm},
+    {{"rmdir", "Removes an empty directory. The operation fails if the directory contains entries.", "rmdir <path>", "path: existing empty directory path.", "rmdir /EMPTY"}, command_rmdir},
+    {{"shutdown", "Requests a system or emulator power-off. On hardware, platform support may vary.", "shutdown", "None.", "shutdown"}, command_shutdown},
+    {{"touch", "Creates an empty file. It fails if the target already exists or its parent directory is missing.", "touch <path>", "path: file path to create.", "touch /NOTES.TXT"}, command_touch},
+    {{"write", "Creates or overwrites a file with the supplied text. Existing contents are replaced; no newline is added automatically.", "write <path> <text>", "path: destination file path. text: all remaining text after the path token.", "write /NOTES.TXT Hello"}, command_write},
 };
 
 static const int command_count = (int)(sizeof(commands) / sizeof(commands[0]));
 
 static const Command* command_find(const char* name) {
     for (int index = 0; index < command_count; index++) {
-        if (string_equals(commands[index].name, name)) {
+        if (string_equals(commands[index].help.name, name)) {
             return &commands[index];
         }
     }
@@ -184,9 +184,36 @@ static const Command* command_find(const char* name) {
 }
 
 static void command_help(const char* arguments) {
-    (void)arguments;
+    char token[COMMAND_TOKEN_CAPACITY];
+    const char* remainder = 0;
+
     DEBUG_LOG("help command executed");
-    command_print_help();
+    if (parse_token(arguments, token, sizeof(token), &remainder) != 0) {
+        (void)help_app_run();
+        return;
+    }
+
+    if (*remainder != '\0') {
+        console_writeln("Usage: help [command]");
+        return;
+    }
+
+    const Command* command = command_find(token);
+    if (command == 0) {
+        console_write("No help found for: ");
+        console_writeln(token);
+        return;
+    }
+
+    console_write(command->help.name);
+    console_write(" - ");
+    console_writeln(command->help.description);
+    console_write("Syntax: ");
+    console_writeln(command->help.usage);
+    console_write("Parameters: ");
+    console_writeln(command->help.parameters);
+    console_write("Example: ");
+    console_writeln(command->help.example);
 }
 
 static void command_clear(const char* arguments) {
@@ -774,14 +801,26 @@ const char* command_get_cwd(void) {
     return command_cwd;
 }
 
+uint32_t command_get_help_count(void) {
+    return (uint32_t)command_count;
+}
+
+const command_help_entry_t* command_get_help_entry(uint32_t index) {
+    if (index >= (uint32_t)command_count) {
+        return 0;
+    }
+
+    return &commands[index].help;
+}
+
 void command_print_help(void) {
-    console_writeln("Commands:");
+    console_writeln("PrismOS commands (use help to open the command browser):");
 
     for (int index = 0; index < command_count; index++) {
         console_write("  ");
-        console_write(commands[index].name);
+        console_write(commands[index].help.name);
         console_write(" - ");
-        console_writeln(commands[index].description);
+        console_writeln(commands[index].help.description);
     }
 }
 

@@ -80,6 +80,15 @@ is mounted on the host, and unmount it cleanly first so changes are flushed.
 QEMU run targets and `make clean` refuse to proceed while the default host mount
 is active, to help prevent simultaneous access or accidental data deletion.
 
+## Command help
+
+Run `help` for the full-screen, alphabetized command browser. Use Up/Down to
+select commands, Home/End to jump through the list, type a letter to jump to a
+command, and Enter to open its detailed description, syntax, parameter notes,
+and example. Esc returns from details or closes the browser; Q closes it
+immediately. Use `help <command>` for the same information as a short shell
+summary.
+
 
 # Developing and Contributing to PrismOS
 > [!IMPORTANT]
