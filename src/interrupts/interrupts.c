@@ -12,10 +12,18 @@
 #define PIT_BASE_FREQUENCY 1193182U
 #define PIT_FREQUENCY 100U
 
+static volatile uint32_t uptime_milliseconds;
+
 static void pit_irq_handler(registers_t* regs)
 {
     (void)regs;
+    uptime_milliseconds += 1000U / PIT_FREQUENCY;
     console_tick();
+}
+
+uint32_t system_uptime_ms(void)
+{
+    return uptime_milliseconds;
 }
 
 static void pit_init(void)

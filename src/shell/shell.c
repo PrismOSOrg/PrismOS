@@ -5,6 +5,7 @@
 #include "display/console.h"
 #include "filesystem/vfs.h"
 #include "input/keyboard.h"
+#include "net/network.h"
 #include "util/clipboard.h"
 
 #define SHELL_HISTORY_SIZE 16
@@ -427,6 +428,13 @@ void shell_run(void) {
     shell_show_prompt();
 
     while (1) {
-        shell_handle_event(keyboard_read_event());
+        KeyEvent event;
+        network_poll();
+        event = keyboard_poll_event();
+        if (event.type == KEY_EVENT_NONE) {
+            __asm__ volatile ("hlt");
+            continue;
+        }
+        shell_handle_event(event);
     }
 }

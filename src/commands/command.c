@@ -8,6 +8,13 @@
 #include "filesystem/blockdev.h"
 #include "filesystem/vfs.h"
 #include "filesystem/partition_manager.h"
+#include "net/arp.h"
+#include "net/dhcp.h"
+#include "net/ethernet.h"
+#include "net/icmp.h"
+#include "net/ipv4.h"
+#include "net/network.h"
+#include "net/tcp.h"
 #include "apps/app_manager.h"
 #include "apps/help_app.h"
 #include "apps/partition_manager_app.h"
@@ -82,6 +89,8 @@ static int parse_drive_index(const char* text, uint32_t* out_index);
 static void command_mv(const char* arguments);
 static void command_partitions(const char* arguments);
 static void command_drive(const char* arguments);
+static void command_net(const char* arguments);
+static void command_ping(const char* arguments);
 
 static char command_cwd[COMMAND_PATH_CAPACITY] = "/";
 
@@ -166,7 +175,9 @@ static const Command commands[] = {
     {{"ls", "Lists files and subdirectories in the current directory or in a specified path, including file sizes.", "ls [path]", "path: optional directory path; defaults to the current directory.", "ls /DATA"}, command_ls},
     {{"mkdir", "Creates a new directory at the given path on the active FAT32 volume.", "mkdir <path>", "path: directory path to create; its parent directory must already exist.", "mkdir /DOCS"}, command_mkdir},
     {{"mv", "Moves or renames a file by copying it and then removing the source. Directory moves are not supported; file size is limited by the move buffer.", "mv <source> <destination>", "source: existing file path. destination: new file path; it must not be a directory.", "mv /OLD.TXT /NEW.TXT"}, command_mv},
+    {{"net", "Shows network configuration, controls DHCP, sends ARP requests, or exercises TCP.", "net [status|poll|rx|arp <IPv4>|dhcp|tcp connect <IPv4> <port>|tcp send <text>|tcp read|tcp close]", "status: interfaces, IPv4 configuration, and DHCP state. dhcp: restart address negotiation. tcp: connect to a remote service, send/read bytes, or close the client connection.", "net tcp connect 10.0.2.2 80"}, command_net},
     {{"partitions", "Opens the interactive disk and partition manager, with text commands available for scripting.", "partitions [ui|list|mount <slot>|create <sizeMiB>|shrink <slot> <reduceByMiB>|delete <slot>|rename <slot> <label>]", "No arguments or ui: open the full-screen manager. list: show a text overview. mount: select a formatted FAT32 volume by 1-based MBR slot; this is different from a physical drive index. create: size in MiB; the new partition is unformatted. shrink: reclaim this many MiB from the free tail of the mounted FAT32 primary partition. delete: 1-based MBR slot; data is not erased. rename: change the mounted FAT32 volume label.", "partitions mount 2"}, command_partitions},
+    {{"ping", "Sends an ICMP Echo Request and waits for a matching Echo Reply.", "ping <IPv4>", "IPv4: destination address; DHCP must have configured this interface first.", "ping 10.0.2.2"}, command_ping},
     {{"reboot", "Immediately restarts the computer or emulator. Unsaved filesystem or editor changes may be lost.", "reboot", "None.", "reboot"}, command_reboot},
     {{"rm", "Removes a file from the active FAT32 volume. Use rmdir for an empty directory.", "rm <path>", "path: existing file path; directories are not accepted.", "rm /OLD.TXT"}, command_rm},
     {{"rmdir", "Removes an empty directory. The operation fails if the directory contains entries.", "rmdir <path>", "path: existing empty directory path.", "rmdir /EMPTY"}, command_rmdir},
@@ -644,6 +655,314 @@ static int parse_drive_index(const char* text, uint32_t* out_index) {
 
     *out_index = value;
     return 0;
+}
+
+static void command_print_mac_address(const uint8_t address[6]) {
+    static const char hex_digits[] = "0123456789ABCDEF";
+    for (uint32_t index = 0U; index < 6U; index++) {
+        if (index != 0U) {
+            console_write_char(':');
+        }
+        console_write_char(hex_digits[address[index] >> 4]);
+        console_write_char(hex_digits[address[index] & 0x0FU]);
+    }
+}
+
+static void command_print_hex16(uint16_t value) {
+    static const char hex_digits[] = "0123456789ABCDEF";
+    for (int shift = 12; shift >= 0; shift -= 4) {
+        console_write_char(hex_digits[(value >> shift) & 0x0FU]);
+    }
+}
+
+static int command_parse_ipv4(const char* text, uint8_t address[4]) {
+    const char* cursor = text;
+    for (uint32_t octet = 0U; octet < 4U; octet++) {
+        uint32_t value = 0U;
+        uint32_t digits = 0U;
+        while (*cursor >= '0' && *cursor <= '9') {
+            value = value * 10U + (uint32_t)(*cursor - '0');
+            if (value > 255U) {
+                return -1;
+            }
+            cursor++;
+            digits++;
+        }
+        if (digits == 0U) {
+            return -1;
+        }
+        address[octet] = (uint8_t)value;
+        if (octet < 3U) {
+            if (*cursor != '.') {
+                return -1;
+            }
+            cursor++;
+        } else if (*cursor != '\0') {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void command_print_ipv4_address(const uint8_t address[4]) {
+    for (uint32_t index = 0U; index < 4U; index++) {
+        if (index != 0U) {
+            console_write_char('.');
+        }
+        console_write_uint(address[index]);
+    }
+}
+
+static void command_net(const char* arguments) {
+    char operation[COMMAND_TOKEN_CAPACITY];
+    char argument[COMMAND_TOKEN_CAPACITY];
+    const char* remainder = 0;
+    int interface_count = network_interface_count();
+
+    if (*skip_spaces(arguments) == '\0' || string_equals(skip_spaces(arguments), "status")) {
+        ipv4_configuration_t configuration;
+        if (interface_count <= 0) {
+            console_writeln("No supported network interface detected. Use make run-net with QEMU e1000.");
+            return;
+        }
+        console_writeln("NETWORK INTERFACES");
+        for (uint32_t index = 0U; index < (uint32_t)interface_count; index++) {
+            network_interface_t* interface = network_interface_get(index);
+            if (interface == 0) {
+                continue;
+            }
+            console_write(interface->name);
+            console_write("  MAC ");
+            command_print_mac_address(interface->mac_address);
+            console_write("  MTU ");
+            console_write_uint(interface->mtu);
+            console_write("  ");
+            console_writeln(interface->link_up ? "LINK UP" : "LINK DOWN");
+            console_write("  TX ");
+            console_write_uint(interface->stats.transmitted_frames);
+            console_write("  RX ");
+            console_write_uint(interface->stats.received_frames);
+            console_write("  Dropped ");
+            console_write_uint(interface->stats.dropped_frames);
+            console_write("  Errors ");
+            console_write_uint(interface->stats.transmit_errors + interface->stats.receive_errors);
+            console_writeln("");
+        }
+        if (ipv4_get_configuration(&configuration) == 0) {
+            console_write("  IPv4 ");
+            command_print_ipv4_address(configuration.address);
+            console_write("  Mask ");
+            command_print_ipv4_address(configuration.netmask);
+            console_write("  Gateway ");
+            command_print_ipv4_address(configuration.gateway);
+            console_write("  DNS ");
+            command_print_ipv4_address(configuration.dns);
+            console_writeln("");
+        } else {
+            console_writeln("  IPv4 not configured");
+        }
+        console_write("  DHCP ");
+        switch (dhcp_get_state()) {
+            case DHCP_STATE_DISCOVERING: console_writeln("discovering"); break;
+            case DHCP_STATE_REQUESTING: console_writeln("requesting"); break;
+            case DHCP_STATE_RENEWING: console_writeln("renewing"); break;
+            case DHCP_STATE_REBINDING: console_writeln("rebinding"); break;
+            case DHCP_STATE_BOUND: console_writeln("bound"); break;
+            case DHCP_STATE_FAILED: console_writeln("failed"); break;
+            default: console_writeln("stopped"); break;
+        }
+        console_writeln("Use: net poll | net rx | net arp <IPv4> | net dhcp | net tcp");
+        return;
+    }
+
+    if (parse_token(arguments, operation, sizeof(operation), &remainder) != 0) {
+        console_writeln("Usage: net [status|poll|rx|arp <IPv4>]");
+        return;
+    }
+    if (string_equals(operation, "poll")) {
+        if (*remainder != '\0') {
+            console_writeln("Usage: net poll");
+            return;
+        }
+        network_poll();
+        console_writeln("Network receive queues serviced");
+        return;
+    }
+    if (string_equals(operation, "rx")) {
+        uint8_t frame[NETWORK_MAX_FRAME_SIZE];
+        uint16_t length;
+        uint32_t received = 0U;
+        network_poll();
+        while (network_receive_frame(frame, sizeof(frame), &length) == 0) {
+            uint16_t protocol = (uint16_t)(((uint16_t)frame[12U] << 8) | frame[13U]);
+            console_write("Ethernet frame: ");
+            console_write_uint(length);
+            console_write(" bytes, EtherType 0x");
+            command_print_hex16(protocol);
+            console_write(", source ");
+            command_print_mac_address(&frame[6U]);
+            console_writeln("");
+            received++;
+        }
+        if (received == 0U) {
+            console_writeln("No queued Ethernet frames");
+        }
+        return;
+    }
+    if (string_equals(operation, "arp")) {
+        ipv4_configuration_t configuration;
+        uint8_t target_ip[4];
+        uint8_t target_mac[6];
+        network_interface_t* interface = network_default_interface();
+
+        if (parse_token(remainder, argument, sizeof(argument), &remainder) != 0
+            || *remainder != '\0' || command_parse_ipv4(argument, target_ip) != 0) {
+            console_writeln("Usage: net arp <IPv4>");
+            return;
+        }
+        if (interface == 0) {
+            console_writeln("No network interface is available");
+            return;
+        }
+        if (ipv4_get_configuration(&configuration) != 0) {
+            console_writeln("No IPv4 address; run net dhcp first");
+            return;
+        }
+        if (!interface->link_up) {
+            console_writeln("Network link is down");
+            return;
+        }
+        if (arp_request_ipv4(interface, configuration.address, target_ip) != 0) {
+            console_writeln("Could not transmit ARP request");
+            return;
+        }
+        DEBUG_LOG("net: ARP request transmitted");
+
+        console_write("ARP request sent for ");
+        command_print_ipv4_address(target_ip);
+        for (uint32_t attempt = 0U; attempt < 50U; attempt++) {
+            network_poll();
+            if (arp_lookup_ipv4(target_ip, target_mac) == 0) {
+                console_write("; resolved to ");
+                command_print_mac_address(target_mac);
+                console_writeln("");
+                return;
+            }
+            __asm__ volatile ("hlt");
+        }
+        console_writeln("; no ARP reply yet (try net poll, then net rx)");
+        return;
+    }
+
+    if (string_equals(operation, "dhcp")) {
+        if (*remainder != '\0') {
+            console_writeln("Usage: net dhcp");
+            return;
+        }
+        if (dhcp_start() != 0) {
+            console_writeln("Could not start DHCP negotiation");
+        } else {
+            console_writeln("DHCP discovery sent; use net status to check the lease");
+        }
+        return;
+    }
+
+    if (string_equals(operation, "tcp")) {
+        char tcp_operation[COMMAND_TOKEN_CAPACITY];
+        if (parse_token(remainder, tcp_operation, sizeof(tcp_operation), &remainder) != 0) {
+            console_writeln("Usage: net tcp connect <IPv4> <port> | send <text> | read | close");
+            return;
+        }
+        if (string_equals(tcp_operation, "connect")) {
+            char address_text[COMMAND_TOKEN_CAPACITY];
+            char port_text[COMMAND_TOKEN_CAPACITY];
+            uint8_t address[4];
+            uint32_t port;
+            if (parse_token(remainder, address_text, sizeof(address_text), &remainder) != 0
+                || command_parse_ipv4(address_text, address) != 0
+                || parse_token(remainder, port_text, sizeof(port_text), &remainder) != 0
+                || *remainder != '\0' || parse_drive_index(port_text, &port) != 0
+                || port == 0U || port > 65535U) {
+                console_writeln("Usage: net tcp connect <IPv4> <port>");
+                return;
+            }
+            console_write("Connecting to ");
+            command_print_ipv4_address(address);
+            console_write(":");
+            console_write_uint(port);
+            console_writeln(" ...");
+            if (tcp_connect(address, (uint16_t)port, 5000U) == 0) {
+                console_writeln("TCP connection established");
+            } else {
+                console_writeln("TCP connection failed or timed out");
+            }
+            return;
+        }
+        if (string_equals(tcp_operation, "send")) {
+            uint32_t length = string_length(remainder);
+            if (length == 0U || length > 512U || tcp_send((const uint8_t*)remainder,
+                (uint16_t)length, 3000U) != 0) {
+                console_writeln("TCP send failed (connection unavailable, data too long, or no ACK)");
+            } else {
+                console_writeln("TCP data acknowledged");
+            }
+            return;
+        }
+        if (string_equals(tcp_operation, "read")) {
+            uint8_t buffer[512];
+            uint16_t length;
+            if (*remainder != '\0' || tcp_read(buffer, sizeof(buffer), &length) != 0) {
+                console_writeln("No TCP data available");
+                return;
+            }
+            for (uint32_t index = 0U; index < length; index++) {
+                console_write_char((char)buffer[index]);
+            }
+            console_write_char('\n');
+            return;
+        }
+        if (string_equals(tcp_operation, "close")) {
+            if (*remainder != '\0' || tcp_close(3000U) != 0) {
+                console_writeln("TCP connection could not be closed");
+            } else {
+                console_writeln("TCP connection closed");
+            }
+            return;
+        }
+        console_writeln("Usage: net tcp connect <IPv4> <port> | send <text> | read | close");
+        return;
+    }
+
+    console_writeln("Usage: net [status|poll|rx|arp <IPv4>|dhcp|tcp ...]");
+}
+
+static void command_ping(const char* arguments) {
+    char address_text[COMMAND_TOKEN_CAPACITY];
+    const char* remainder = 0;
+    uint8_t address[4];
+    uint32_t round_trip_ms;
+    int result;
+
+    if (parse_token(arguments, address_text, sizeof(address_text), &remainder) != 0
+        || *remainder != '\0' || command_parse_ipv4(address_text, address) != 0) {
+        console_writeln("Usage: ping <IPv4>");
+        return;
+    }
+    console_write("PING ");
+    command_print_ipv4_address(address);
+    console_writeln(": 8 data bytes");
+    result = icmp_ping(address, 3000U, &round_trip_ms);
+    if (result == 0) {
+        console_write("Reply from ");
+        command_print_ipv4_address(address);
+        console_write(": time=");
+        console_write_uint(round_trip_ms);
+        console_writeln(" ms");
+    } else if (result == -2) {
+        console_writeln("Destination could not be resolved with ARP");
+    } else {
+        console_writeln("Request timed out or ICMP is unavailable");
+    }
 }
 
 static void command_drive(const char* arguments) {

@@ -16,7 +16,7 @@ QEMU_FLAGS=-boot order=d -cdrom $(BUILD)/os.iso \
 	-drive file=$(QEMU_DISK_IMAGE),format=$(QEMU_DISK_FORMAT),if=ide,index=0,media=disk \
 	-monitor none
 
-.PHONY: all run run-serial run-serial-log run-vhdx run-secondary check-disk-unmounted mount-disk unmount-disk mount-vhdx unmount-vhdx prismcc clean
+.PHONY: all run run-serial run-serial-log run-vhdx run-secondary run-net run-net-serial check-disk-unmounted mount-disk unmount-disk mount-vhdx unmount-vhdx prismcc clean
 
 all: os.iso
 
@@ -58,7 +58,19 @@ $(BUILD)/pmm.o \
 $(BUILD)/paging.o
 
 DRIVER_OBJS = \
-$(BUILD)/driver_api.o
+$(BUILD)/driver_api.o \
+$(BUILD)/pci.o
+
+NETWORK_OBJS = \
+$(BUILD)/network.o \
+$(BUILD)/ethernet.o \
+$(BUILD)/arp.o \
+$(BUILD)/ipv4.o \
+$(BUILD)/udp.o \
+$(BUILD)/dhcp.o \
+$(BUILD)/icmp.o \
+$(BUILD)/tcp.o \
+$(BUILD)/e1000.o
 
 FS_OBJS = \
 $(BUILD)/blockdev.o \
@@ -111,6 +123,12 @@ $(BUILD)/%.o: src/filesystem/%.c | $(BUILD)
 $(BUILD)/%.o: src/filesystem/fat32/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/%.o: src/net/%.c | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/e1000.o: src/net/drivers/e1000.c | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
 $(BUILD)/%.o: src/apps/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
@@ -146,6 +164,7 @@ $(CORE_OBJS) \
 $(INTERRUPT_OBJS) \
 $(MEMORY_OBJS) \
 $(DRIVER_OBJS) \
+$(NETWORK_OBJS) \
 $(FS_OBJS) \
 $(APP_OBJS)
 
@@ -202,6 +221,12 @@ run-vhdx: check-disk-unmounted os.iso $(BUILD)/disk.vhdx
 
 run-secondary: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE) $(BUILD)/disk-secondary.img
 	$(QEMU) $(QEMU_FLAGS) -drive file=$(BUILD)/disk-secondary.img,format=raw,if=ide,index=1,media=disk
+
+run-net: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
+	$(QEMU) $(QEMU_FLAGS) -netdev user,id=net0 -device e1000,netdev=net0
+
+run-net-serial: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
+	$(QEMU) $(QEMU_FLAGS) -netdev user,id=net0 -device e1000,netdev=net0 -serial stdio
 
 # -------------------------
 # HOST IMAGE ACCESS

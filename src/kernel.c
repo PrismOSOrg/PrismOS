@@ -12,6 +12,7 @@
 #include "filesystem/blockdev.h"
 #include "filesystem/partition_manager.h"
 #include "filesystem/vfs.h"
+#include "net/network.h"
 #include "apps/app_manager.h"
 
 #include <stddef.h>
@@ -162,6 +163,12 @@ void main(void) {
     interrupts_init();
     keyboard_init();
     comport_irq_init();
+
+    if (network_init() == 0) {
+        DEBUG_LOG("network interface initialized");
+    } else {
+        DEBUG_LOG("no supported network interface detected");
+    }
 
     if (blockdev_init_disk() != 0) {
         ERROR_LOG("storage init failed");

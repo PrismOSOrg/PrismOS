@@ -24,6 +24,8 @@ make run-serial    # boot and mirror COM1 to your terminal
 make run-serial-log # boot and save COM1 output to build/serial.log
 make run-vhdx      # convert the test disk to VHDX and boot it in QEMU
 make run-secondary # attach a separate 2 GiB FAT32 IDE disk for drive-switch testing
+make run-net       # attach a QEMU e1000 NIC with user-mode networking
+make run-net-serial # same network setup with COM1 debug output
 ```
 
 Clipboard sharing:
@@ -101,6 +103,25 @@ needs NBD and FAT filesystem support. Never run PrismOS on the image while it
 is mounted on the host, and unmount it cleanly first so changes are flushed.
 QEMU run targets and `make clean` refuse to proceed while the default host mount
 is active, to help prevent simultaneous access or accidental data deletion.
+
+## Networking foundations
+
+The initial network driver supports the QEMU-compatible Intel e1000 adapter
+using PCI discovery and polled DMA rings. Start it with `make run-net` (or
+`make run-net-serial` to see boot diagnostics over COM1). The guest requests an
+IPv4 lease from DHCP at startup; `net status` shows its address, mask, gateway,
+DNS server, and DHCP state. Use `net dhcp` to restart negotiation, `net arp
+10.0.2.2` to resolve QEMU's user-network gateway, and `ping 10.0.2.2` to test
+ICMP Echo. The stack validates IPv4 and transport checksums, dispatches UDP,
+ICMP, and TCP, and responds to ARP requests for its leased address.
+
+The TCP diagnostic is a single outbound client connection: `net tcp connect
+<IPv4> <port>`, `net tcp send <text>`, `net tcp read`, and `net tcp close`.
+It implements a basic handshake, acknowledgements, bounded data buffering, and
+retransmission. It is not a general-purpose TCP implementation: there is no
+listener/server API, congestion control, window scaling, IP fragmentation,
+DNS resolver, or multiple concurrent connections. DHCP obtains a lease and
+renews/rebinds it, but no DNS lookup command or UDP shell client is provided.
 
 ## Command help
 
