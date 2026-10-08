@@ -11,6 +11,7 @@
 #define FAT32_CLUSTER_FREE 0x00000000U
 #define FAT32_CLUSTER_EOC 0x0FFFFFFFU
 #define FAT32_CLUSTER_EOC_MIN 0x0FFFFFF8U
+#define FAT32_MIN_CLUSTER_COUNT 65525U
 
 typedef struct {
     int mounted;
@@ -1148,5 +1149,458 @@ int fat32_path_is_dir(const char* abs_path, int* out_is_dir) {
     (void)parent;
 
     *out_is_dir = ((ref.entry[11] & FAT32_ATTR_DIRECTORY) != 0U) ? 1 : 0;
+    return 0;
+}
+
+int fat32_get_space(uint32_t* out_total_sectors, uint32_t* out_used_sectors, uint32_t* out_free_sectors) {
+    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
+    uint32_t cluster_limit;
+    uint32_t free_clusters = 0U;
+
+    if (!fs.mounted || out_total_sectors == NULL || out_used_sectors == NULL || out_free_sectors == NULL) {
+        return -1;
+    }
+
+    cluster_limit = max_cluster_index();
+    if (cluster_limit <= 2U) {
+        return -1;
+    }
+
+    for (uint32_t fat_sector = 0; fat_sector < fs.sectors_per_fat; fat_sector++) {
+        uint32_t first_cluster = (fat_sector * BLOCKDEV_SECTOR_SIZE) / 4U;
+        if (first_cluster >= cluster_limit) {
+            break;
+        }
+
+        if (blockdev_read_sector(fs.fat_start_sector + fat_sector, sector) != 0) {
+            return -1;
+        }
+
+        for (uint32_t offset = 0; offset < BLOCKDEV_SECTOR_SIZE; offset += 4U) {
+            uint32_t cluster = first_cluster + offset / 4U;
+            if (cluster >= 2U && cluster < cluster_limit && read_u32le(&sector[offset]) == FAT32_CLUSTER_FREE) {
+                free_clusters++;
+            }
+        }
+    }
+
+    {
+        uint32_t total_clusters = cluster_limit - 2U;
+        uint32_t used_clusters = total_clusters - free_clusters;
+        *out_total_sectors = total_clusters * (uint32_t)fs.sectors_per_cluster;
+        *out_used_sectors = used_clusters * (uint32_t)fs.sectors_per_cluster;
+        *out_free_sectors = free_clusters * (uint32_t)fs.sectors_per_cluster;
+    }
+
+    return 0;
+}
+
+static int fat32_shrink_tail_is_free(uint32_t new_cluster_limit, uint32_t old_cluster_limit) {
+    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
+
+    for (uint32_t fat_sector = 0U; fat_sector < fs.sectors_per_fat; fat_sector++) {
+        uint32_t first_cluster = (fat_sector * BLOCKDEV_SECTOR_SIZE) / 4U;
+        if (first_cluster >= old_cluster_limit) {
+            break;
+        }
+        if (blockdev_read_sector(fs.fat_start_sector + fat_sector, sector) != 0) {
+            return FAT32_RESIZE_ERROR_IO;
+        }
+
+        for (uint32_t offset = 0U; offset < BLOCKDEV_SECTOR_SIZE; offset += 4U) {
+            uint32_t cluster = first_cluster + offset / 4U;
+            uint32_t next_cluster = read_u32le(&sector[offset]) & 0x0FFFFFFFU;
+            if (cluster < 2U || cluster >= old_cluster_limit) {
+                continue;
+            }
+            if (cluster >= new_cluster_limit) {
+                if (next_cluster != FAT32_CLUSTER_FREE) {
+                    return FAT32_RESIZE_ERROR_DATA_PRESENT;
+                }
+            } else if (next_cluster >= new_cluster_limit && next_cluster < FAT32_CLUSTER_EOC_MIN) {
+                return FAT32_RESIZE_ERROR_DATA_PRESENT;
+            }
+        }
+    }
+
+    return FAT32_RESIZE_OK;
+}
+
+static int fat32_invalidate_fsinfo(uint32_t sector_index) {
+    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
+
+    if (sector_index >= fs.reserved_sectors) {
+        return FAT32_RESIZE_ERROR_INVALID;
+    }
+    if (blockdev_read_sector(sector_index, sector) != 0) {
+        return FAT32_RESIZE_ERROR_IO;
+    }
+    if (read_u32le(&sector[0U]) != 0x41615252U
+        || read_u32le(&sector[484U]) != 0x61417272U
+        || read_u32le(&sector[508U]) != 0xAA550000U) {
+        return FAT32_RESIZE_OK;
+    }
+
+    write_u32le(&sector[488U], 0xFFFFFFFFU);
+    write_u32le(&sector[492U], 0xFFFFFFFFU);
+    return blockdev_write_sector(sector_index, sector) == 0
+        ? FAT32_RESIZE_OK : FAT32_RESIZE_ERROR_IO;
+}
+
+int fat32_shrink_volume(uint32_t new_total_sectors) {
+    uint8_t primary[BLOCKDEV_SECTOR_SIZE];
+    uint8_t backup[BLOCKDEV_SECTOR_SIZE];
+    uint32_t data_sectors;
+    uint32_t cluster_count;
+    uint32_t new_cluster_limit;
+    uint32_t old_cluster_limit;
+    uint16_t backup_sector;
+    uint16_t fsinfo_sector;
+    int have_backup;
+
+    if (!fs.mounted || new_total_sectors <= fs.data_start_sector
+        || new_total_sectors > blockdev_sector_count()) {
+        return FAT32_RESIZE_ERROR_INVALID;
+    }
+    if (new_total_sectors == fs.total_sectors) {
+        return FAT32_RESIZE_OK;
+    }
+    if (new_total_sectors > fs.total_sectors) {
+        return FAT32_RESIZE_ERROR_INVALID;
+    }
+
+    data_sectors = new_total_sectors - fs.data_start_sector;
+    cluster_count = data_sectors / (uint32_t)fs.sectors_per_cluster;
+    if (cluster_count < FAT32_MIN_CLUSTER_COUNT || cluster_count > 0x0FFFFFF0U - 2U) {
+        return FAT32_RESIZE_ERROR_INVALID;
+    }
+    new_cluster_limit = clamp_cluster_limit(2U + cluster_count);
+    old_cluster_limit = max_cluster_index();
+    if (new_cluster_limit <= fs.root_cluster || new_cluster_limit > old_cluster_limit) {
+        return FAT32_RESIZE_ERROR_INVALID;
+    }
+
+    {
+        int validation = fat32_shrink_tail_is_free(new_cluster_limit, old_cluster_limit);
+        if (validation != FAT32_RESIZE_OK) {
+            return validation;
+        }
+    }
+
+    if (blockdev_read_sector(0U, primary) != 0
+        || read_u32le(&primary[32U]) != fs.total_sectors) {
+        return FAT32_RESIZE_ERROR_IO;
+    }
+    backup_sector = read_u16le(&primary[50U]);
+    have_backup = backup_sector != 0U && backup_sector < fs.reserved_sectors
+        && backup_sector < fs.total_sectors;
+    if (have_backup && blockdev_read_sector(backup_sector, backup) != 0) {
+        return FAT32_RESIZE_ERROR_IO;
+    }
+
+    fsinfo_sector = read_u16le(&primary[48U]);
+    if (fsinfo_sector != 0U && fsinfo_sector != 0xFFFFU) {
+        int fsinfo_result = fat32_invalidate_fsinfo(fsinfo_sector);
+        if (fsinfo_result != FAT32_RESIZE_OK) {
+            return fsinfo_result;
+        }
+    }
+    if (have_backup) {
+        uint16_t backup_fsinfo = read_u16le(&backup[48U]);
+        uint32_t backup_fsinfo_sector = (uint32_t)backup_sector + backup_fsinfo;
+        if (backup_fsinfo != 0U && backup_fsinfo != 0xFFFFU
+            && backup_fsinfo_sector != fsinfo_sector
+            && backup_fsinfo_sector < fs.reserved_sectors) {
+            int fsinfo_result = fat32_invalidate_fsinfo(backup_fsinfo_sector);
+            if (fsinfo_result != FAT32_RESIZE_OK) {
+                return fsinfo_result;
+            }
+        }
+    }
+
+    write_u32le(&primary[32U], new_total_sectors);
+    if (have_backup) {
+        write_u32le(&backup[32U], new_total_sectors);
+        if (blockdev_write_sector(backup_sector, backup) != 0) {
+            return FAT32_RESIZE_ERROR_IO;
+        }
+    }
+    if (blockdev_write_sector(0U, primary) != 0) {
+        if (have_backup) {
+            write_u32le(&backup[32U], fs.total_sectors);
+            (void)blockdev_write_sector(backup_sector, backup);
+        }
+        return FAT32_RESIZE_ERROR_IO;
+    }
+
+    fs.total_sectors = new_total_sectors;
+    return FAT32_RESIZE_OK;
+}
+
+static int fat32_prepare_volume_label(const char* label, uint8_t out_label[11]) {
+    uint32_t length = 0U;
+
+    if (label == NULL || label[0] == '\0') {
+        return -1;
+    }
+
+    while (label[length] != '\0') {
+        uint8_t character = (uint8_t)label[length];
+        if (length >= 11U) {
+            return -1;
+        }
+        if (!((character >= 'A' && character <= 'Z')
+                || (character >= 'a' && character <= 'z')
+                || (character >= '0' && character <= '9')
+                || character == '_' || character == '-')) {
+            return -1;
+        }
+        out_label[length] = to_upper(character);
+        length++;
+    }
+
+    while (length < 11U) {
+        out_label[length++] = ' ';
+    }
+
+    return 0;
+}
+
+int fat32_format_volume(const char* label, uint32_t hidden_sectors) {
+    const uint32_t reserved_sectors = 32U;
+    const uint32_t fat_count = 2U;
+    const uint32_t sectors_per_cluster = 1U;
+    uint8_t boot_sector[BLOCKDEV_SECTOR_SIZE];
+    uint8_t fsinfo_sector[BLOCKDEV_SECTOR_SIZE];
+    uint8_t fat_sector[BLOCKDEV_SECTOR_SIZE];
+    uint8_t label_bytes[11];
+    uint32_t total_sectors = blockdev_sector_count();
+    uint32_t sectors_per_fat = 1U;
+    uint32_t data_clusters = 0U;
+    int converged = 0;
+
+    if (total_sectors <= reserved_sectors + fat_count * 2U
+        || fat32_prepare_volume_label(label, label_bytes) != 0) {
+        return FAT32_RESIZE_ERROR_INVALID;
+    }
+
+    for (uint32_t iteration = 0U; iteration < 16U; iteration++) {
+        uint32_t data_sectors;
+        uint32_t required_fat_sectors;
+        if (sectors_per_fat > (total_sectors - reserved_sectors) / fat_count) {
+            return FAT32_RESIZE_ERROR_INVALID;
+        }
+        data_sectors = total_sectors - reserved_sectors - fat_count * sectors_per_fat;
+        data_clusters = data_sectors / sectors_per_cluster;
+        required_fat_sectors = ((data_clusters + 2U) * 4U + BLOCKDEV_SECTOR_SIZE - 1U)
+            / BLOCKDEV_SECTOR_SIZE;
+        if (required_fat_sectors == sectors_per_fat) {
+            converged = 1;
+            break;
+        }
+        sectors_per_fat = required_fat_sectors;
+    }
+
+    /* PrismOS accepts small FAT32-layout volumes even below the spec's cluster-count threshold. */
+    if (!converged || data_clusters == 0U
+        || data_clusters > 0x0FFFFFF0U - 2U
+        || (data_clusters + 2U) > sectors_per_fat * (BLOCKDEV_SECTOR_SIZE / 4U)) {
+        return FAT32_RESIZE_ERROR_INVALID;
+    }
+
+    /* Quick format: rebuild only filesystem metadata; leave file-data sectors untouched. */
+    fat32_unmount();
+    for (uint32_t fat_index = 0U; fat_index < fat_count; fat_index++) {
+        uint32_t fat_start = reserved_sectors + fat_index * sectors_per_fat;
+        for (uint32_t sector_index = 0U; sector_index < sectors_per_fat; sector_index++) {
+            if (sector_index == 0U) {
+                memory_set(fat_sector, 0U, sizeof(fat_sector));
+                fat_sector[0] = 0xF8U;
+                fat_sector[1] = 0xFFU;
+                fat_sector[2] = 0xFFU;
+                fat_sector[3] = 0x0FU;
+                fat_sector[4] = 0xFFU;
+                fat_sector[5] = 0xFFU;
+                fat_sector[6] = 0xFFU;
+                fat_sector[7] = 0x0FU;
+                fat_sector[8] = 0xFFU;
+                fat_sector[9] = 0xFFU;
+                fat_sector[10] = 0xFFU;
+                fat_sector[11] = 0x0FU;
+            } else {
+                memory_set(fat_sector, 0U, sizeof(fat_sector));
+            }
+            if (blockdev_write_sector(fat_start + sector_index, fat_sector) != 0) {
+                return FAT32_RESIZE_ERROR_IO;
+            }
+        }
+    }
+
+    memory_set(fsinfo_sector, 0U, sizeof(fsinfo_sector));
+    write_u32le(&fsinfo_sector[0U], 0x41615252U);
+    write_u32le(&fsinfo_sector[484U], 0x61417272U);
+    write_u32le(&fsinfo_sector[488U], data_clusters - 1U);
+    write_u32le(&fsinfo_sector[492U], 3U);
+    write_u32le(&fsinfo_sector[508U], 0xAA550000U);
+    if (blockdev_write_sector(1U, fsinfo_sector) != 0
+        || blockdev_write_sector(7U, fsinfo_sector) != 0) {
+        return FAT32_RESIZE_ERROR_IO;
+    }
+
+    memory_set(fat_sector, 0U, sizeof(fat_sector));
+    for (uint32_t index = 0U; index < 11U; index++) {
+        fat_sector[index] = label_bytes[index];
+    }
+    fat_sector[11U] = FAT32_ATTR_VOLUME_ID;
+    if (blockdev_write_sector(reserved_sectors + fat_count * sectors_per_fat, fat_sector) != 0) {
+        return FAT32_RESIZE_ERROR_IO;
+    }
+
+    memory_set(boot_sector, 0U, sizeof(boot_sector));
+    boot_sector[0U] = 0xEBU;
+    boot_sector[1U] = 0x58U;
+    boot_sector[2U] = 0x90U;
+    boot_sector[3U] = 'P';
+    boot_sector[4U] = 'R';
+    boot_sector[5U] = 'I';
+    boot_sector[6U] = 'S';
+    boot_sector[7U] = 'M';
+    boot_sector[8U] = 'O';
+    boot_sector[9U] = 'S';
+    boot_sector[10U] = ' ';
+    write_u16le(&boot_sector[11U], BLOCKDEV_SECTOR_SIZE);
+    boot_sector[13U] = (uint8_t)sectors_per_cluster;
+    write_u16le(&boot_sector[14U], (uint16_t)reserved_sectors);
+    boot_sector[16U] = (uint8_t)fat_count;
+    write_u16le(&boot_sector[17U], 0U);
+    write_u16le(&boot_sector[19U], 0U);
+    boot_sector[21U] = 0xF8U;
+    write_u16le(&boot_sector[22U], 0U);
+    write_u16le(&boot_sector[24U], 63U);
+    write_u16le(&boot_sector[26U], 255U);
+    write_u32le(&boot_sector[28U], hidden_sectors);
+    write_u32le(&boot_sector[32U], total_sectors);
+    write_u32le(&boot_sector[36U], sectors_per_fat);
+    write_u16le(&boot_sector[40U], 0U);
+    write_u16le(&boot_sector[42U], 0U);
+    write_u32le(&boot_sector[44U], 2U);
+    write_u16le(&boot_sector[48U], 1U);
+    write_u16le(&boot_sector[50U], 6U);
+    boot_sector[64U] = 0x80U;
+    boot_sector[66U] = 0x29U;
+    write_u32le(&boot_sector[67U], hidden_sectors ^ total_sectors ^ 0x50524953U);
+    for (uint32_t index = 0U; index < 11U; index++) {
+        boot_sector[71U + index] = label_bytes[index];
+    }
+    boot_sector[82U] = 'F';
+    boot_sector[83U] = 'A';
+    boot_sector[84U] = 'T';
+    boot_sector[85U] = '3';
+    boot_sector[86U] = '2';
+    boot_sector[87U] = ' ';
+    boot_sector[88U] = ' ';
+    boot_sector[89U] = ' ';
+    boot_sector[510U] = 0x55U;
+    boot_sector[511U] = 0xAAU;
+
+    if (blockdev_write_sector(6U, boot_sector) != 0
+        || blockdev_write_sector(0U, boot_sector) != 0) {
+        return FAT32_RESIZE_ERROR_IO;
+    }
+
+    return FAT32_RESIZE_OK;
+}
+
+static int fat32_update_root_volume_entry(const uint8_t label_bytes[11]) {
+    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
+    uint32_t cluster = fs.root_cluster;
+    uint32_t guard = 0U;
+    uint32_t limit = max_cluster_index();
+
+    /* A corrupt cyclic directory chain must not make a label update loop forever. */
+    while (is_data_cluster(cluster) && cluster < limit && guard++ < 1024U) {
+        uint32_t start_sector = cluster_to_sector(cluster);
+        for (uint32_t sector_index = 0; sector_index < (uint32_t)fs.sectors_per_cluster; sector_index++) {
+            if (blockdev_read_sector(start_sector + sector_index, sector) != 0) {
+                return -1;
+            }
+
+            for (uint32_t offset = 0; offset < BLOCKDEV_SECTOR_SIZE; offset += 32U) {
+                uint8_t* entry = &sector[offset];
+                if (entry[0] == 0U) {
+                    return 0;
+                }
+                if (entry[0] != 0xE5U
+                    && (entry[11] & FAT32_ATTR_VOLUME_ID) != 0U
+                    && entry[11] != FAT32_ATTR_LFN) {
+                    for (uint32_t index = 0; index < 11U; index++) {
+                        entry[index] = label_bytes[index];
+                    }
+                    return blockdev_write_sector(start_sector + sector_index, sector);
+                }
+            }
+        }
+
+        cluster = read_fat_entry(cluster);
+    }
+
+    return 0;
+}
+
+int fat32_get_volume_label(char* out_label, uint32_t out_capacity) {
+    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
+    uint32_t length = 11U;
+
+    if (!fs.mounted || out_label == NULL || out_capacity < 12U || blockdev_read_sector(0U, sector) != 0) {
+        return -1;
+    }
+
+    while (length > 0U && (sector[71U + length - 1U] == ' ' || sector[71U + length - 1U] == 0U)) {
+        length--;
+    }
+
+    for (uint32_t index = 0; index < length; index++) {
+        out_label[index] = (char)sector[71U + index];
+    }
+    out_label[length] = '\0';
+    return 0;
+}
+
+int fat32_set_volume_label(const char* label) {
+    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
+    uint8_t label_bytes[11];
+    uint16_t backup_sector;
+
+    if (!fs.mounted || fat32_prepare_volume_label(label, label_bytes) != 0
+        || blockdev_read_sector(0U, sector) != 0) {
+        return -1;
+    }
+
+    if (fat32_update_root_volume_entry(label_bytes) != 0) {
+        return -1;
+    }
+
+    backup_sector = read_u16le(&sector[50U]);
+    for (uint32_t index = 0; index < sizeof(label_bytes); index++) {
+        sector[71U + index] = label_bytes[index];
+    }
+
+    if (backup_sector != 0U && backup_sector < fs.total_sectors) {
+        uint8_t backup[BLOCKDEV_SECTOR_SIZE];
+        if (blockdev_read_sector(backup_sector, backup) != 0) {
+            return -1;
+        }
+        for (uint32_t index = 0; index < sizeof(label_bytes); index++) {
+            backup[71U + index] = label_bytes[index];
+        }
+        if (blockdev_write_sector(backup_sector, backup) != 0) {
+            return -1;
+        }
+    }
+
+    if (blockdev_write_sector(0U, sector) != 0) {
+        return -1;
+    }
+
     return 0;
 }

@@ -23,5 +23,8 @@ int vfs_rm(const char* abs_path);
 int vfs_rmdir(const char* abs_path);
 int vfs_read_file(const char* abs_path, char* out, uint32_t out_capacity, uint32_t* out_size);
 int vfs_write_file(const char* abs_path, const char* text, uint32_t text_size, int append);
+int vfs_get_space(uint32_t* out_total_sectors, uint32_t* out_used_sectors, uint32_t* out_free_sectors);
+int vfs_get_volume_label(char* out_label, uint32_t out_capacity);
+int vfs_set_volume_label(const char* label);
 
 #endif

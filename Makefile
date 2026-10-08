@@ -16,7 +16,7 @@ QEMU_FLAGS=-boot order=d -cdrom $(BUILD)/os.iso \
 	-drive file=$(QEMU_DISK_IMAGE),format=$(QEMU_DISK_FORMAT),if=ide,index=0,media=disk \
 	-monitor none
 
-.PHONY: all run run-serial run-serial-log run-vhdx check-disk-unmounted mount-disk unmount-disk mount-vhdx unmount-vhdx prismcc clean
+.PHONY: all run run-serial run-serial-log run-vhdx run-secondary check-disk-unmounted mount-disk unmount-disk mount-vhdx unmount-vhdx prismcc clean
 
 all: os.iso
 
@@ -72,6 +72,7 @@ $(BUILD)/app_runtime.o \
 $(BUILD)/bytecode_vm.o \
 $(BUILD)/prismcc_runtime.o \
 $(BUILD)/help_app.o \
+$(BUILD)/partition_manager_app.o \
 $(BUILD)/editor_app.o \
 $(BUILD)/ide_app.o \
 $(BUILD)/bank_app.o \
@@ -168,6 +169,11 @@ $(BUILD)/disk.img:
 	printf 'label: dos\nunit: sectors\n\nstart=2048, size=129024, type=c, bootable\n' | sfdisk $@
 	mkfs.fat -F 32 -n PRISMOS --offset=2048 $@
 
+$(BUILD)/disk-secondary.img:
+	truncate -s 2G $@
+	printf 'label: dos\nunit: sectors\n\nstart=2048, size=4192256, type=c, bootable\n' | sfdisk $@
+	mkfs.fat -F 32 -n SECONDARY --offset=2048 $@
+
 $(BUILD)/disk.vhdx: $(BUILD)/disk.img
 	qemu-img convert -f raw -O vhdx $< $@
 
@@ -193,6 +199,9 @@ run-vhdx: QEMU_DISK_IMAGE=$(BUILD)/disk.vhdx
 run-vhdx: QEMU_DISK_FORMAT=vhdx
 run-vhdx: check-disk-unmounted os.iso $(BUILD)/disk.vhdx
 	$(QEMU) $(QEMU_FLAGS)
+
+run-secondary: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE) $(BUILD)/disk-secondary.img
+	$(QEMU) $(QEMU_FLAGS) -drive file=$(BUILD)/disk-secondary.img,format=raw,if=ide,index=1,media=disk
 
 # -------------------------
 # HOST IMAGE ACCESS

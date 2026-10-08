@@ -10,6 +10,7 @@
 #include "filesystem/partition_manager.h"
 #include "apps/app_manager.h"
 #include "apps/help_app.h"
+#include "apps/partition_manager_app.h"
 #include "apps/prismcc_runtime.h"
 
 #define COMMAND_PATH_CAPACITY 128
@@ -77,6 +78,7 @@ static void command_ide(const char* arguments);
 static void command_app_run(const char* arguments);
 static void command_cc(const char* arguments);
 static void command_driver_run(const char* arguments);
+static int parse_drive_index(const char* text, uint32_t* out_index);
 static void command_mv(const char* arguments);
 static void command_partitions(const char* arguments);
 static void command_drive(const char* arguments);
@@ -155,7 +157,7 @@ static const Command commands[] = {
     {{"clear", "Clears the visible console without changing the current directory or filesystem state.", "clear", "None.", "clear"}, command_clear},
     {{"comport", "Sends a line of text through the COM1 serial port, useful for external serial terminals and diagnostics.", "comport <text>", "text: message to transmit; spaces are included.", "comport test message"}, command_comport},
     {{"delete", "Removes a file or an empty directory. Non-empty directories cannot be removed.", "delete <path>", "path: existing file or empty directory path.", "delete /OLD.TXT"}, command_delete},
-    {{"drive", "Lists detected ATA drives and capacities, or switches to a drive and mounts its first supported FAT32 volume.", "drive [index]", "index: optional zero-based drive number shown by drive. Switching resets the current directory to root.", "drive 1"}, command_drive},
+    {{"drive", "Lists physical ATA drives and capacities, or switches to a drive and mounts its first supported FAT32 volume. Partition slots are selected with partitions mount.", "drive [index]", "index: optional zero-based physical drive number shown by drive; it is not an MBR partition slot. Switching resets the current directory to root.", "drive 1"}, command_drive},
     {{"driver-run", "Loads and starts a PrismCC .pdr module through the cooperative driver runtime. Press Esc to request shutdown.", "driver-run <path.pdr>", "path.pdr: compiled PrismCC driver package with driver_init, driver_poll, driver_shutdown, and main entry points.", "driver-run /DRIVERS/SERIAL.PDR"}, command_driver_run},
     {{"echo", "Prints the command's remaining text to the console. Useful for quick shell messages.", "echo <text>", "text: message to display; spaces are preserved.", "echo Hello PrismOS"}, command_echo},
     {{"edit", "Opens a text file in the built-in full-screen editor. Save or exit using the editor's on-screen controls.", "edit <path>", "path: file path to open or create.", "edit /NOTES.TXT"}, command_edit},
@@ -164,7 +166,7 @@ static const Command commands[] = {
     {{"ls", "Lists files and subdirectories in the current directory or in a specified path, including file sizes.", "ls [path]", "path: optional directory path; defaults to the current directory.", "ls /DATA"}, command_ls},
     {{"mkdir", "Creates a new directory at the given path on the active FAT32 volume.", "mkdir <path>", "path: directory path to create; its parent directory must already exist.", "mkdir /DOCS"}, command_mkdir},
     {{"mv", "Moves or renames a file by copying it and then removing the source. Directory moves are not supported; file size is limited by the move buffer.", "mv <source> <destination>", "source: existing file path. destination: new file path; it must not be a directory.", "mv /OLD.TXT /NEW.TXT"}, command_mv},
-    {{"partitions", "Shows the active drive's total capacity and its detected MBR primary partition entries, including the mounted FAT32 volume.", "partitions", "None.", "partitions"}, command_partitions},
+    {{"partitions", "Opens the interactive disk and partition manager, with text commands available for scripting.", "partitions [ui|list|mount <slot>|create <sizeMiB>|shrink <slot> <reduceByMiB>|delete <slot>|rename <slot> <label>]", "No arguments or ui: open the full-screen manager. list: show a text overview. mount: select a formatted FAT32 volume by 1-based MBR slot; this is different from a physical drive index. create: size in MiB; the new partition is unformatted. shrink: reclaim this many MiB from the free tail of the mounted FAT32 primary partition. delete: 1-based MBR slot; data is not erased. rename: change the mounted FAT32 volume label.", "partitions mount 2"}, command_partitions},
     {{"reboot", "Immediately restarts the computer or emulator. Unsaved filesystem or editor changes may be lost.", "reboot", "None.", "reboot"}, command_reboot},
     {{"rm", "Removes a file from the active FAT32 volume. Use rmdir for an empty directory.", "rm <path>", "path: existing file path; directories are not accepted.", "rm /OLD.TXT"}, command_rm},
     {{"rmdir", "Removes an empty directory. The operation fails if the directory contains entries.", "rmdir <path>", "path: existing empty directory path.", "rmdir /EMPTY"}, command_rmdir},
@@ -256,51 +258,368 @@ static void command_about(const char* arguments) {
     console_writeln(" MB");
 }
 
-static void command_partitions(const char* arguments) {
+static uint32_t command_ratio_percent(uint32_t numerator, uint32_t denominator) {
+    uint32_t remainder = 0U;
+    uint32_t percent = 0U;
+
+    if (denominator == 0U) {
+        return 0U;
+    }
+    if (numerator >= denominator) {
+        return 100U;
+    }
+
+    /* Repeated modular addition avoids numerator * 100 overflowing 32-bit arithmetic. */
+    for (uint32_t step = 0; step < 100U; step++) {
+        if (remainder >= denominator - numerator) {
+            remainder -= denominator - numerator;
+            percent++;
+        } else {
+            remainder += numerator;
+        }
+    }
+
+    return percent;
+}
+
+static void command_print_usage_bar(uint32_t used, uint32_t total) {
+    const uint32_t width = 32U;
+    uint32_t percent = command_ratio_percent(used, total);
+    uint32_t filled = (percent * width) / 100U;
+
+    console_write("[");
+    for (uint32_t index = 0; index < width; index++) {
+        console_write_char(index < filled ? '#' : '-');
+    }
+    console_write("] ");
+    console_write_uint(percent);
+    console_writeln("% used");
+}
+
+static void command_print_mib(uint32_t sectors) {
+    console_write_uint(sectors / 2048U);
+    console_write_char('.');
+    console_write_uint(((sectors % 2048U) * 10U) / 2048U);
+    console_write(" MiB");
+}
+
+static void command_print_partition_overview(void) {
     uint32_t count = partition_manager_count();
     uint32_t drive_sectors = blockdev_device_sector_count();
+    uint32_t partition_sectors = 0U;
+    uint32_t unallocated_sectors = 0U;
+    uint32_t total_fs_sectors = 0U;
+    uint32_t used_fs_sectors = 0U;
+    uint32_t free_fs_sectors = 0U;
+    int superfloppy = partition_manager_is_superfloppy();
+    int have_space = vfs_get_space(&total_fs_sectors, &used_fs_sectors, &free_fs_sectors) == 0;
 
-    (void)arguments;
     console_write("Drive ");
     console_write_uint(blockdev_current_drive());
-    console_write(" total size: ");
-    console_write_uint(drive_sectors / 2048U);
-    console_write(" MiB (");
+    console_write(" capacity: ");
+    command_print_mib(drive_sectors);
+    console_write(" (");
     console_write_uint(drive_sectors);
     console_writeln(" sectors)");
 
+    if (superfloppy) {
+        console_writeln("Layout: FAT32 superfloppy (no editable MBR entries)");
+    } else if (partition_manager_get_usage(&partition_sectors, &unallocated_sectors) == 0) {
+        console_write("Partitioned: ");
+        command_print_mib(partition_sectors);
+        console_write("  Unallocated: ");
+        command_print_mib(unallocated_sectors);
+        console_writeln("");
+    } else {
+        console_writeln("Partition-space totals unavailable (invalid MBR layout)");
+    }
+
+    if (have_space) {
+        char label[12];
+        console_write("Mounted FAT32 volume");
+        if (vfs_get_volume_label(label, sizeof(label)) == 0 && label[0] != '\0') {
+            console_write(" (");
+            console_write(label);
+            console_write(")");
+        }
+        console_writeln(":");
+        console_write("  Used: ");
+        command_print_mib(used_fs_sectors);
+        console_write("  Available: ");
+        command_print_mib(free_fs_sectors);
+        console_write("  Total: ");
+        command_print_mib(total_fs_sectors);
+        console_write("\n  ");
+        command_print_usage_bar(used_fs_sectors, total_fs_sectors);
+    } else {
+        console_writeln("Mounted FAT32 usage unavailable");
+    }
+
     if (count == 0U) {
-        console_writeln("No partition table detected");
+        console_writeln("No partition entries detected");
         return;
     }
 
-    console_writeln("Index Type Start LBA Sectors Status");
+    console_writeln("Partitions (slot, type, start LBA, size, boot, status):");
     for (uint32_t index = 0; index < count; index++) {
         partition_info_t partition;
         if (partition_manager_get(index, &partition) != 0) {
             continue;
         }
 
+        console_write("  ");
         console_write_uint(index + 1U);
-        console_write("     ");
-        if (partition_manager_is_superfloppy()) {
-            console_write("FAT32 ");
+        console_write(": ");
+        if (superfloppy) {
+            console_write("FAT32 superfloppy");
+        } else if (partition.type == 0x0CU) {
+            console_write("FAT32-LBA (12)");
+        } else if (partition.type == 0x0BU) {
+            console_write("FAT32 (11)");
+        } else if (partition.type == 0U && partition.start_sector == 0U && partition.sector_count == 0U) {
+            console_writeln("empty slot");
+            continue;
         } else {
+            console_write("type ");
             console_write_uint(partition.type);
-            console_write("    ");
         }
+
+        console_write("  start=");
         console_write_uint(partition.start_sector);
-        console_write("    ");
-        console_write_uint(partition.sector_count);
-        console_write("    ");
+        console_write("  size=");
+        command_print_mib(partition.sector_count);
+        console_write("  boot=");
+        console_write(partition.bootable ? "yes" : "no");
+        console_write("  ");
         if (!partition.valid) {
-            console_writeln("invalid");
+            console_writeln("invalid range");
         } else if (partition.is_selected) {
             console_writeln("mounted");
         } else {
-            console_writeln("available");
+            console_writeln("not mounted");
         }
     }
+}
+
+static int command_refresh_partition_mount(void) {
+    vfs_unmount();
+    if (partition_manager_init() != 0 || vfs_init() != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static void command_partitions(const char* arguments) {
+    char operation[COMMAND_TOKEN_CAPACITY];
+    char first_argument[COMMAND_TOKEN_CAPACITY];
+    char second_argument[COMMAND_TOKEN_CAPACITY];
+    const char* remainder = 0;
+
+    if (parse_token(arguments, operation, sizeof(operation), &remainder) != 0) {
+        (void)partition_manager_app_run();
+        return;
+    }
+
+    if (string_equals(operation, "ui")) {
+        if (*remainder != '\0') {
+            console_writeln("Usage: partitions ui");
+            return;
+        }
+        (void)partition_manager_app_run();
+        return;
+    }
+
+    if (string_equals(operation, "list")) {
+        if (*remainder != '\0') {
+            console_writeln("Usage: partitions [list]");
+            return;
+        }
+        command_print_partition_overview();
+        return;
+    }
+
+    if (string_equals(operation, "mount")) {
+        uint32_t index;
+        uint32_t previous_index = 0U;
+        int had_previous = partition_manager_get_selected_index(&previous_index) == 0;
+        int status;
+
+        if (parse_token(remainder, first_argument, sizeof(first_argument), &remainder) != 0
+            || *remainder != '\0' || parse_drive_index(first_argument, &index) != 0 || index == 0U) {
+            console_writeln("Usage: partitions mount <1-based-slot>");
+            return;
+        }
+
+        vfs_unmount();
+        status = partition_manager_select(index);
+        if (status == PARTITION_MANAGER_OK && vfs_init() == 0) {
+            command_cwd[0] = '/';
+            command_cwd[1] = '\0';
+            console_write("Mounted FAT32 partition slot ");
+            console_write_uint(index);
+            console_writeln(" at /");
+        } else {
+            vfs_unmount();
+            if (had_previous) {
+                (void)partition_manager_select(previous_index);
+                (void)vfs_init();
+            } else {
+                (void)command_refresh_partition_mount();
+            }
+            if (status == PARTITION_MANAGER_ERROR_UNSUPPORTED) {
+                console_writeln("Partition is not formatted with a supported FAT32 volume; format it first");
+            } else if (status == PARTITION_MANAGER_ERROR_SUPERFLOPPY) {
+                console_writeln("A whole-disk FAT32 volume has no MBR partition slots");
+            } else {
+                console_writeln("Could not mount that partition; previous volume restored");
+            }
+        }
+        return;
+    }
+
+    if (string_equals(operation, "create")) {
+        uint32_t size_mib;
+        uint32_t slot;
+        uint32_t start_sector;
+        int status;
+
+        if (parse_token(remainder, first_argument, sizeof(first_argument), &remainder) != 0
+            || *remainder != '\0'
+            || parse_drive_index(first_argument, &size_mib) != 0
+            || size_mib == 0U) {
+            console_writeln("Usage: partitions create <sizeMiB> (size must be a positive integer)");
+            return;
+        }
+
+        status = partition_manager_create(size_mib, &slot, &start_sector);
+        if (status == PARTITION_MANAGER_ERROR_SUPERFLOPPY) {
+            console_writeln("Cannot create MBR partitions on a FAT32 superfloppy disk");
+        } else if (status == PARTITION_MANAGER_ERROR_NO_SLOT) {
+            console_writeln("Cannot create partition: all four primary MBR slots are occupied");
+        } else if (status == PARTITION_MANAGER_ERROR_NO_SPACE) {
+            console_writeln("Cannot create partition: insufficient contiguous unallocated space");
+        } else if (status == PARTITION_MANAGER_ERROR_ARGUMENT) {
+            console_writeln("Invalid partition size; enter a positive MiB value within drive limits");
+        } else if (status == PARTITION_MANAGER_ERROR_TABLE) {
+            console_writeln("Cannot create partition: MBR is invalid, overlapping, or unsupported");
+        } else if (status != PARTITION_MANAGER_OK) {
+            console_writeln("Cannot create partition: disk read/write failed");
+        } else {
+            console_write("Created FAT32-type partition in MBR slot ");
+            console_write_uint(slot);
+            console_write(" at LBA ");
+            console_write_uint(start_sector);
+            console_write(" (");
+            console_write_uint(size_mib);
+            console_writeln(" MiB). It is unformatted; format it before mounting.");
+            if (command_refresh_partition_mount() != 0) {
+                console_writeln("Warning: partition table changed, but the mounted FAT32 volume could not be restored");
+            }
+            command_print_partition_overview();
+        }
+        return;
+    }
+
+    if (string_equals(operation, "delete")) {
+        uint32_t index;
+        int status;
+
+        if (parse_token(remainder, first_argument, sizeof(first_argument), &remainder) != 0
+            || *remainder != '\0' || parse_drive_index(first_argument, &index) != 0 || index == 0U) {
+            console_writeln("Usage: partitions delete <1-based-slot>");
+            return;
+        }
+
+        status = partition_manager_delete(index);
+        if (status == PARTITION_MANAGER_ERROR_SUPERFLOPPY) {
+            console_writeln("Cannot delete MBR entries on a FAT32 superfloppy disk");
+        } else if (status == PARTITION_MANAGER_ERROR_PROTECTED) {
+            console_writeln("Cannot delete the mounted partition; switch to another volume first");
+        } else if (status == PARTITION_MANAGER_ERROR_NO_SLOT) {
+            console_writeln("Partition slot is empty or does not exist");
+        } else if (status == PARTITION_MANAGER_ERROR_ARGUMENT) {
+            console_writeln("Partition slot must be between 1 and 4");
+        } else if (status == PARTITION_MANAGER_ERROR_UNSUPPORTED) {
+            console_writeln("Cannot delete extended or protective entries; logical/GPT partitions are unsupported");
+        } else if (status == PARTITION_MANAGER_ERROR_TABLE) {
+            console_writeln("Cannot delete partition: table entry is invalid or changed");
+        } else if (status != PARTITION_MANAGER_OK) {
+            console_writeln("Cannot delete partition: disk read/write failed");
+        } else {
+            console_writeln("Partition entry deleted. Data in its former range was not erased.");
+            if (command_refresh_partition_mount() != 0) {
+                console_writeln("Warning: partition table changed, but the mounted FAT32 volume could not be restored");
+            }
+            command_print_partition_overview();
+        }
+        return;
+    }
+
+    if (string_equals(operation, "shrink")) {
+        uint32_t index;
+        uint32_t shrink_mib;
+        int status;
+
+        if (parse_token(remainder, first_argument, sizeof(first_argument), &remainder) != 0
+            || parse_token(remainder, second_argument, sizeof(second_argument), &remainder) != 0
+            || *remainder != '\0' || parse_drive_index(first_argument, &index) != 0 || index == 0U
+            || parse_drive_index(second_argument, &shrink_mib) != 0 || shrink_mib == 0U) {
+            console_writeln("Usage: partitions shrink <mounted-slot> <reduceByMiB>");
+            return;
+        }
+
+        status = partition_manager_shrink(index, shrink_mib);
+        if (status == PARTITION_MANAGER_ERROR_DATA_PRESENT) {
+            console_writeln("Cannot shrink: allocated data still occupies the partition tail");
+        } else if (status == PARTITION_MANAGER_ERROR_PROTECTED) {
+            console_writeln("Only the mounted FAT32 primary partition can be shrunk");
+        } else if (status == PARTITION_MANAGER_ERROR_ARGUMENT) {
+            console_writeln("Invalid shrink size; it must leave a valid FAT32 volume");
+        } else if (status == PARTITION_MANAGER_ERROR_SUPERFLOPPY) {
+            console_writeln("Cannot shrink a FAT32 superfloppy as an MBR partition");
+        } else if (status == PARTITION_MANAGER_ERROR_TABLE) {
+            console_writeln("Cannot shrink an invalid or unsupported MBR layout");
+        } else if (status == PARTITION_MANAGER_ERROR_PARTIAL) {
+            console_writeln("FAT32 is safely smaller, but the MBR update failed; retry the same shrink amount");
+        } else if (status != PARTITION_MANAGER_OK) {
+            console_writeln("Cannot shrink partition: disk read/write failed");
+        } else {
+            console_writeln("Mounted partition shrunk; reclaimed tail space can now hold a new partition");
+            if (command_refresh_partition_mount() != 0) {
+                console_writeln("Warning: partition size changed, but the FAT32 volume could not be remounted");
+            }
+            command_print_partition_overview();
+        }
+        return;
+    }
+
+    if (string_equals(operation, "rename")) {
+        uint32_t index;
+        uint32_t selected_index;
+
+        if (parse_token(remainder, first_argument, sizeof(first_argument), &remainder) != 0
+            || parse_token(remainder, second_argument, sizeof(second_argument), &remainder) != 0
+            || *remainder != '\0' || parse_drive_index(first_argument, &index) != 0 || index == 0U) {
+            console_writeln("Usage: partitions rename <mounted-slot> <label>");
+            return;
+        }
+
+        if (partition_manager_get_selected_index(&selected_index) != 0 || selected_index != index) {
+            console_writeln("Only the currently mounted FAT32 partition can be renamed");
+            return;
+        }
+        if (vfs_set_volume_label(second_argument) != 0) {
+            console_writeln("Invalid label or unable to write it; use 1-11 letters, digits, '_' or '-'");
+            return;
+        }
+
+        console_write("Renamed mounted FAT32 volume to ");
+        console_writeln(second_argument);
+        command_print_partition_overview();
+        return;
+    }
+
+    console_writeln("Usage: partitions [ui|list|mount <slot>|create <sizeMiB>|shrink <slot> <reduceByMiB>|delete <slot>|rename <slot> <label>]");
 }
 
 static int parse_drive_index(const char* text, uint32_t* out_index) {
@@ -335,27 +654,47 @@ static void command_drive(const char* arguments) {
     if (*input == '\0') {
         uint32_t count = blockdev_drive_count();
         if (count == 0U) {
+            console_set_color(COLOR_LIGHT_CYAN, COLOR_BLACK);
+            console_writeln("ATA DRIVE OVERVIEW");
+            console_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
             console_writeln("No ATA hard drives detected");
+            console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
             return;
         }
 
-        console_writeln("Drive Size Status");
+        console_set_color(COLOR_LIGHT_CYAN, COLOR_BLACK);
+        console_writeln("ATA DRIVE OVERVIEW");
+        console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+        console_writeln("  ID   CAPACITY        STATUS");
         for (uint32_t index = 0; index < count; index++) {
             blockdev_drive_info_t info;
             if (blockdev_get_drive_info(index, &info) != 0) {
                 continue;
             }
 
-            console_write("Drive ");
+            int is_current = index == blockdev_current_drive();
+            console_set_color(is_current ? COLOR_LIGHT_GREEN : COLOR_LIGHT_GRAY, COLOR_BLACK);
+            console_write(is_current ? "  *  " : "     ");
             console_write_uint(index);
-            console_write(" ");
-            console_write_uint(info.sector_count / 2048U);
-            console_write(" MiB (");
-            console_write_uint(info.sector_count);
-            console_write(" sectors) ");
-            console_writeln(index == blockdev_current_drive() ? "current" : "available");
+            console_write("   ");
+            command_print_mib(info.sector_count);
+            console_write("   ");
+            console_writeln(is_current ? "MOUNTED" : "DETECTED");
         }
-        console_writeln("Use: drive <index>");
+
+        char volume_label[12];
+        console_set_color(COLOR_YELLOW, COLOR_BLACK);
+        console_write("Mounted volume: ");
+        if (vfs_get_volume_label(volume_label, sizeof(volume_label)) == 0 && volume_label[0] != '\0') {
+            console_writeln(volume_label);
+        } else {
+            console_writeln("unavailable");
+        }
+        console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+        console_writeln("Drive index selects a physical disk; partition slots are separate.");
+        console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
+        console_writeln("Switch disk: drive <index>    Mount partition: partitions mount <slot>");
+        console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
         return;
     }
 
@@ -366,25 +705,31 @@ static void command_drive(const char* arguments) {
 
     uint32_t selected_drive;
     if (parse_drive_index(token, &selected_drive) != 0 ||
-        blockdev_select_drive(selected_drive) != 0) {
-        console_writeln("Drive index not found");
+        selected_drive >= blockdev_drive_count()) {
+        console_writeln("Physical drive index not found; use partitions mount <slot> for an MBR partition");
         return;
     }
 
+    uint32_t previous_drive = blockdev_current_drive();
     vfs_unmount();
-    command_cwd[0] = '/';
-    command_cwd[1] = '\0';
-
-    if (partition_manager_init() != 0 || vfs_init() != 0) {
+    if (blockdev_select_drive(selected_drive) != 0
+        || partition_manager_init() != 0 || vfs_init() != 0) {
+        vfs_unmount();
+        if (blockdev_select_drive(previous_drive) == 0
+            && partition_manager_init() == 0) {
+            (void)vfs_init();
+        }
         console_write("Drive ");
         console_write_uint(selected_drive);
-        console_writeln(" selected, but no supported FAT32 volume was found");
+        console_writeln(" has no mountable FAT32 volume; previous drive restored");
         return;
     }
 
+    command_cwd[0] = '/';
+    command_cwd[1] = '\0';
     console_write("Switched to drive ");
     console_write_uint(selected_drive);
-    console_writeln(" at /");
+    console_writeln(" and mounted its FAT32 volume at /");
 }
 
 static void command_reboot(const char* arguments) {

@@ -217,3 +217,15 @@ int vfs_read_file(const char* abs_path, char* out, uint32_t out_capacity, uint32
 int vfs_write_file(const char* abs_path, const char* text, uint32_t text_size, int append) {
     return fat32_write_file(abs_path, text, text_size, append);
 }
+
+int vfs_get_space(uint32_t* out_total_sectors, uint32_t* out_used_sectors, uint32_t* out_free_sectors) {
+    return fat32_get_space(out_total_sectors, out_used_sectors, out_free_sectors);
+}
+
+int vfs_get_volume_label(char* out_label, uint32_t out_capacity) {
+    return fat32_get_volume_label(out_label, out_capacity);
+}
+
+int vfs_set_volume_label(const char* label) {
+    return fat32_set_volume_label(label);
+}

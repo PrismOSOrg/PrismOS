@@ -3,10 +3,10 @@
 #include "commands/command.h"
 #include "debug/log.h"
 #include "display/console.h"
+#include "filesystem/vfs.h"
 #include "input/keyboard.h"
 #include "util/clipboard.h"
 
-#define SHELL_PROMPT "PrismOS> "
 #define SHELL_HISTORY_SIZE 16
 #define SHELL_MAX_INPUT 96
 
@@ -57,6 +57,22 @@ static void shell_copy_line(char* destination, const char* source, int max_lengt
     }
 
     destination[index] = '\0';
+}
+
+static int shell_write_prompt(void) {
+    const char* cwd = command_get_cwd();
+    char label[12];
+    int prompt_length = 0;
+
+    if (vfs_get_volume_label(label, sizeof(label)) == 0 && label[0] != '\0') {
+        console_write(label);
+        console_write_char(':');
+        prompt_length += string_length(label) + 1;
+    }
+    console_write(cwd);
+    prompt_length += string_length(cwd);
+    console_write("> ");
+    return prompt_length + 2;
 }
 
 // Preserve the current command line so history navigation can come back to it.
@@ -131,25 +147,24 @@ static void shell_paste_clipboard(void) {
 }
 
 static void shell_render_input(void) {
-    const char* cwd = command_get_cwd();
+    int prompt_length;
 
     console_set_cursor(0, shell.prompt_row);
     console_clear_row(shell.prompt_row);
     console_set_cursor(0, shell.prompt_row);
-    console_write(cwd);
-    console_write("> ");
+    prompt_length = shell_write_prompt();
     console_write(shell.line);
     if (shell_has_selection()) {
         int start = shell_selection_start();
         int end = shell_selection_end();
         console_set_color(COLOR_BLACK, COLOR_LIGHT_GRAY);
         for (int index = start; index < end; index++) {
-            console_set_cursor((int)string_length(cwd) + 2 + index, shell.prompt_row);
+            console_set_cursor(prompt_length + index, shell.prompt_row);
             console_write_char(shell.line[index]);
         }
         console_set_color(COLOR_WHITE, COLOR_BLACK);
     }
-    console_set_cursor((int)string_length(cwd) + 2 + shell.cursor, shell.prompt_row);
+    console_set_cursor(prompt_length + shell.cursor, shell.prompt_row);
 }
 
 static void shell_refresh_line(void) {
@@ -334,9 +349,7 @@ static void shell_show_prompt(void) {
     shell_reset_history_navigation();
     console_clear_row(shell.prompt_row);
     console_set_cursor(0, shell.prompt_row);
-    console_write(command_get_cwd());
-    console_write("> ");
-    console_set_cursor((int)string_length(command_get_cwd()) + 2, shell.prompt_row);
+    console_set_cursor(shell_write_prompt(), shell.prompt_row);
 }
 
 static void shell_handle_event(KeyEvent event) {

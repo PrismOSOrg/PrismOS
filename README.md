@@ -23,6 +23,7 @@ make clean         # remove build artifacts
 make run-serial    # boot and mirror COM1 to your terminal
 make run-serial-log # boot and save COM1 output to build/serial.log
 make run-vhdx      # convert the test disk to VHDX and boot it in QEMU
+make run-secondary # attach a separate 2 GiB FAT32 IDE disk for drive-switch testing
 ```
 
 Clipboard sharing:
@@ -43,9 +44,24 @@ PrismOS probes up to four ATA hard drives on the primary and secondary legacy
 IDE channels, scans MBR primary partitions, and mounts the first valid FAT32
 partition (preferring an active partition). Legacy FAT32 volumes that occupy
 the whole disk are also accepted. Use `drive` to list detected drives and their
-capacities, `partitions` to inspect the current drive, and `drive <index>` to
-switch the mounted drive. Switching drives resets the shell working directory
-to `/`; use `cd` to navigate that drive's filesystem.
+capacities, `partitions` to open the full-screen disk manager, and
+`drive <index>` to switch the physical ATA drive. Drive indices are not
+partition slots. In the manager, use Up/Down to select a slot, M to mount a
+formatted FAT32 partition, C to create, S to shrink the mounted FAT32 partition,
+D to delete (with confirmation), F to format a FAT32 primary partition
+(destructive, with confirmation), R to relabel the mounted FAT32 volume, and Esc
+to exit.
+Shrink only reclaims an unallocated tail; move/remove data there first. Use C
+afterward to create a partition in the reclaimed space. `partitions list` prints
+a text overview. Shell operations are also available as `partitions mount
+<slot>`, `partitions create <sizeMiB>`, `partitions shrink <slot> <reduceByMiB>`,
+`partitions delete <slot>`, and `partitions rename <slot> <label>`. Creation adds an aligned FAT32-type
+MBR entry but does not format it; use F in the manager to quick-format a FAT32
+primary partition with the `PRISMOS` label (all contents are erased). Deletion
+removes only an unmounted MBR entry and does not erase its sectors; rename
+changes the currently mounted FAT32 volume label. Switching drives resets the
+shell working directory to `/`; use
+`cd` to navigate that drive's filesystem.
 
 Disk discovery is non-destructive: boot no longer formats an unrecognized or
 blank drive. Prepare a FAT32 partition before booting PrismOS, and back up data
@@ -62,6 +78,12 @@ an existing VHDX instead, set `QEMU_DISK_IMAGE` and `QEMU_DISK_FORMAT`, for
 example `make run QEMU_DISK_IMAGE=/path/to/disk.vhdx QEMU_DISK_FORMAT=vhdx`.
 Use a disposable image for testing because PrismOS writes to mounted FAT32
 volumes.
+
+`make run-secondary` creates a sparse `build/disk-secondary.img` with a 2 GiB
+MBR/FAT32 volume labeled `SECONDARY` and attaches it as the second IDE drive.
+In PrismOS, run `drive` to list physical drive indices, then `drive 1` to switch
+to the secondary disk and confirm the prompt shows `SECONDARY:/`. Both test
+images are writable and their contents persist between runs.
 
 To edit files from the host before booting, mount the image, edit files under
 `build/disk-mnt`, then unmount it before starting QEMU:
