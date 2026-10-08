@@ -221,10 +221,36 @@ int app_manager_run_path(const char* app_abs_path, const char* args) {
         return -1;
     }
 
+    if ((image.header.flags & PRISM_APP_FLAG_DRIVER) != 0U) {
+        ERROR_LOG("driver package rejected by app-run; use driver-run");
+        return -1;
+    }
+
     entry = image.image + image.entry_offset;
     entry_size = image.image_size - image.entry_offset;
     DEBUG_LOG("app manager invoking runtime");
     return app_runtime_run(entry, entry_size, args == 0 ? "" : args);
+}
+
+int app_manager_run_driver_path(const char* driver_abs_path) {
+    app_loader_image_t image;
+
+    if (!app_manager_ready || driver_abs_path == 0) {
+        ERROR_LOG("driver manager rejected invalid path or unavailable filesystem");
+        return -1;
+    }
+
+    if (app_loader_load_image(driver_abs_path, &image) != 0
+        || (image.header.flags & PRISM_APP_FLAG_DRIVER) == 0U
+        || image.entry_offset >= image.image_size) {
+        ERROR_LOG("driver package failed validation or is not marked as a driver");
+        return -1;
+    }
+
+    DEBUG_LOG("driver package loaded; entering cooperative runtime");
+    return app_runtime_run_driver(image.image + image.entry_offset,
+        image.image_size - image.entry_offset,
+        "");
 }
 
 int app_manager_run_editor(const char* target_abs_path) {

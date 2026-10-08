@@ -18,6 +18,7 @@
     <a href="index.html">Home</a>
     <a href="#overview">Overview</a>
     <a href="#api-reference">API Reference</a>
+    <a href="#drivers">Drivers</a>
     <a href="#limits">Limits</a>
     <a href="#workflow">Workflow</a>
   </nav>
@@ -276,6 +277,29 @@ set_fullscreen(0);</code></div>
         <li>Indexed read and write</li>
       </ul>
       <p class="note">Array storage is VM heap backed, and out-of-range access fails VM execution.</p>
+    </div>
+
+    <div class="card" id="drivers">
+      <h2>PrismCC Driver Modules</h2>
+      <p>Compile inside PrismOS to a <code>.pdr</code> package (the FAT32 filesystem uses 8.3 filenames). Driver sources must implement <code>int driver_init()</code>,
+        <code>void driver_poll()</code>, <code>void driver_shutdown()</code>, and <code>int main()</code>. The main
+        function coordinates lifecycle and should poll until <code>driver_should_stop()</code> detects Esc.</p>
+      <div class="api-item">
+        <h3 class="api-title"><code>driver_serial_write(string)</code> / <code>driver_serial_read()</code></h3>
+        <p class="api-meta">Writes text to COM1 or polls one queued byte. Read returns <code>-1</code> if no byte is queued.</p>
+      </div>
+      <div class="api-item">
+        <h3 class="api-title"><code>driver_io_read8(port)</code> / <code>driver_io_write8(port, value)</code></h3>
+        <p class="api-meta">Performs byte I/O through a kernel allowlist, currently limited to COM1 ports <code>0x3F8..0x3FF</code>.</p>
+      </div>
+      <div class="api-item">
+        <h3 class="api-title"><code>driver_mmio_read32(address)</code> / <code>driver_mmio_write32(address, value)</code></h3>
+        <p class="api-meta">Accesses aligned words only within MMIO regions registered by trusted kernel code using <code>driver_mmio_register_region()</code>.</p>
+      </div>
+      <p class="note">Place the sample source at <code>/SERDRV.C</code>, create <code>/DRIVERS</code>, then build with
+        <code>cc /SERDRV.C /DRIVERS/SERIAL.PDR</code> and run <code>driver-run /DRIVERS/SERIAL.PDR</code>. Drivers execute
+        in the shared kernel address space and are trusted code, not sandboxed applications. See
+        <code>examples/serdrv.c</code>.</p>
     </div>
 
     <div class="card" id="limits">

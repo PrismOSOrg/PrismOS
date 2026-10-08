@@ -76,6 +76,7 @@ static void command_edit(const char* arguments);
 static void command_ide(const char* arguments);
 static void command_app_run(const char* arguments);
 static void command_cc(const char* arguments);
+static void command_driver_run(const char* arguments);
 static void command_mv(const char* arguments);
 static void command_partitions(const char* arguments);
 static void command_drive(const char* arguments);
@@ -149,12 +150,13 @@ static const Command commands[] = {
     {{"app-run", "Loads and runs a Prism app package from the active drive. Optional trailing text is passed to the app runtime.", "app-run <path> [args]", "path: app package path. args: optional argument text passed to the app.", "app-run /APPS/BANK.APP"}, command_app_run},
     {{"append", "Adds text to the end of an existing file. The text is stored as provided; this command does not add a newline.", "append <path> <text>", "path: destination file path. text: all remaining text after the path token.", "append /NOTES.TXT More text"}, command_append},
     {{"cat", "Reads a text file and prints its contents. Output is limited by the shell command's text buffer.", "cat <path>", "path: file path to read.", "cat /README.TXT"}, command_cat},
-    {{"cc", "Compiles PrismOS's supported subset of C source into a Prism app package on the active drive.", "cc <input.c> <output.app>", "input.c: source file path. output.app: destination package path.", "cc /HELLO.C /HELLO.APP"}, command_cc},
+    {{"cc", "Compiles supported PrismCC source into an app package, or into a cooperative driver package when the output uses the .pdr suffix.", "cc <input.c> <output.app|output.pdr>", "input.c: source file path. output.app: app destination. output.pdr: driver destination; requires the driver lifecycle functions.", "cc /SERDRV.C /DRIVERS/SERIAL.PDR"}, command_cc},
     {{"cd", "Changes the shell's current directory. Relative paths resolve from the current directory; drive switching returns to the root.", "cd <path>", "path: existing directory path.", "cd /DATA"}, command_cd},
     {{"clear", "Clears the visible console without changing the current directory or filesystem state.", "clear", "None.", "clear"}, command_clear},
     {{"comport", "Sends a line of text through the COM1 serial port, useful for external serial terminals and diagnostics.", "comport <text>", "text: message to transmit; spaces are included.", "comport test message"}, command_comport},
     {{"delete", "Removes a file or an empty directory. Non-empty directories cannot be removed.", "delete <path>", "path: existing file or empty directory path.", "delete /OLD.TXT"}, command_delete},
     {{"drive", "Lists detected ATA drives and capacities, or switches to a drive and mounts its first supported FAT32 volume.", "drive [index]", "index: optional zero-based drive number shown by drive. Switching resets the current directory to root.", "drive 1"}, command_drive},
+    {{"driver-run", "Loads and starts a PrismCC .pdr module through the cooperative driver runtime. Press Esc to request shutdown.", "driver-run <path.pdr>", "path.pdr: compiled PrismCC driver package with driver_init, driver_poll, driver_shutdown, and main entry points.", "driver-run /DRIVERS/SERIAL.PDR"}, command_driver_run},
     {{"echo", "Prints the command's remaining text to the console. Useful for quick shell messages.", "echo <text>", "text: message to display; spaces are preserved.", "echo Hello PrismOS"}, command_echo},
     {{"edit", "Opens a text file in the built-in full-screen editor. Save or exit using the editor's on-screen controls.", "edit <path>", "path: file path to open or create.", "edit /NOTES.TXT"}, command_edit},
     {{"help", "Opens the interactive command browser, or prints syntax, parameters, and an example for one named command.", "help [command]", "command: optional command name to look up.", "help drive"}, command_help},
@@ -759,6 +761,26 @@ static void command_app_run(const char* arguments) {
     }
 }
 
+static void command_driver_run(const char* arguments) {
+    char token[COMMAND_TOKEN_CAPACITY];
+    char absolute[COMMAND_PATH_CAPACITY];
+    const char* remainder = 0;
+
+    if (parse_token(arguments, token, sizeof(token), &remainder) != 0 || *remainder != '\0') {
+        console_writeln("Usage: driver-run <path.pdr>");
+        return;
+    }
+
+    if (resolve_to_absolute_path(token, absolute, sizeof(absolute)) != 0) {
+        console_writeln("Invalid driver path");
+        return;
+    }
+
+    if (app_manager_run_driver_path(absolute) != 0) {
+        console_writeln("driver load or execution failed");
+    }
+}
+
 static void command_cc(const char* arguments) {
     char input_token[COMMAND_TOKEN_CAPACITY];
     char output_token[COMMAND_TOKEN_CAPACITY];
@@ -768,12 +790,12 @@ static void command_cc(const char* arguments) {
     const char* remainder = 0;
 
     if (parse_token(arguments, input_token, sizeof(input_token), &remainder) != 0) {
-        console_writeln("Usage: cc <input.c> <output.app>");
+        console_writeln("Usage: cc <input.c> <output.app|output.pdr>");
         return;
     }
 
     if (parse_token(remainder, output_token, sizeof(output_token), &remainder) != 0 || *remainder != '\0') {
-        console_writeln("Usage: cc <input.c> <output.app>");
+        console_writeln("Usage: cc <input.c> <output.app|output.pdr>");
         return;
     }
 
@@ -793,7 +815,7 @@ static void command_cc(const char* arguments) {
         return;
     }
 
-    console_write("Compiled app: ");
+    console_write("Compiled package: ");
     console_writeln(output_absolute);
 }
 

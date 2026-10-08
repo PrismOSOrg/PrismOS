@@ -3,6 +3,7 @@
 #include "apps/app_format.h"
 #include "debug/log.h"
 #include "display/console.h"
+#include "drivers/driver_api.h"
 #include "filesystem/vfs.h"
 #include "input/keyboard.h"
 
@@ -38,6 +39,7 @@ static int32_t vm_locals[BCVM_CALL_DEPTH_MAX + 1U][BCVM_LOCALS_MAX];
 static uint32_t vm_call_return_pc[BCVM_CALL_DEPTH_MAX];
 static char vm_file_path_buffer[BCVM_FILE_PATH_MAX];
 static char vm_file_text_buffer[BCVM_FILE_TEXT_MAX + 1U];
+static int vm_driver_mode;
 
 #define VM_STRING_DESC_HEAP_MASK 0x80000000U
 
@@ -1171,6 +1173,72 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 console_draw_pixel((int)x, (int)y, (VGA_Color)color);
                 break;
             }
+            case BCVM_OP_DRIVER_SERIAL_WRITE: {
+                const char* bytes;
+                uint16_t length;
+                int32_t status;
+
+                if (!vm_driver_mode || sp == 0U || sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+
+                if (vm_resolve_string_descriptor((uint32_t)stack[--sp], data, &header, &bytes, &length) != 0) {
+                    return -1;
+                }
+                status = driver_api_serial_write(bytes, length);
+                stack[sp++] = status;
+                break;
+            }
+            case BCVM_OP_DRIVER_SERIAL_READ:
+                if (!vm_driver_mode || sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+                stack[sp++] = driver_api_serial_read();
+                break;
+            case BCVM_OP_DRIVER_PORT_READ8:
+                if (!vm_driver_mode || sp == 0U) {
+                    return -1;
+                }
+                stack[sp - 1U] = driver_api_port_read8((uint32_t)stack[sp - 1U]);
+                break;
+            case BCVM_OP_DRIVER_PORT_WRITE8: {
+                uint32_t port;
+                uint32_t value;
+
+                if (!vm_driver_mode || sp < 2U) {
+                    return -1;
+                }
+                value = (uint32_t)stack[--sp];
+                port = (uint32_t)stack[--sp];
+                stack[sp++] = driver_api_port_write8(port, value);
+                break;
+            }
+            case BCVM_OP_DRIVER_MMIO_READ32:
+                if (!vm_driver_mode || sp == 0U) {
+                    return -1;
+                }
+                stack[sp - 1U] = driver_api_mmio_read32((uint32_t)stack[sp - 1U]);
+                break;
+            case BCVM_OP_DRIVER_MMIO_WRITE32: {
+                uint32_t address;
+                uint32_t value;
+
+                if (!vm_driver_mode || sp < 2U) {
+                    return -1;
+                }
+                value = (uint32_t)stack[--sp];
+                address = (uint32_t)stack[--sp];
+                stack[sp++] = driver_api_mmio_write32(address, value);
+                break;
+            }
+            case BCVM_OP_DRIVER_SHOULD_STOP:
+                if (!vm_driver_mode || sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+                /* Driver loops must explicitly poll for shutdown; each poll renews the VM budget. */
+                steps = 0U;
+                stack[sp++] = vm_poll_quit_request() ? 1 : 0;
+                break;
             case BCVM_OP_POP:
                 if (sp == 0U) {
                     return -1;
@@ -1211,4 +1279,19 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
 
     ERROR_LOG("BCVM execution aborted");
     return -1;
+}
+
+int bytecode_vm_run_driver(const uint8_t* image, uint32_t image_size, const char* args) {
+    int result;
+
+    if (driver_runtime_begin() != 0) {
+        ERROR_LOG("PrismCC driver runtime could not claim hardware services");
+        return -1;
+    }
+
+    vm_driver_mode = 1;
+    result = bytecode_vm_run(image, image_size, args);
+    vm_driver_mode = 0;
+    driver_runtime_end();
+    return result;
 }

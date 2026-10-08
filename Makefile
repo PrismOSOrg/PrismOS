@@ -57,6 +57,9 @@ MEMORY_OBJS = \
 $(BUILD)/pmm.o \
 $(BUILD)/paging.o
 
+DRIVER_OBJS = \
+$(BUILD)/driver_api.o
+
 FS_OBJS = \
 $(BUILD)/blockdev.o \
 $(BUILD)/partition_manager.o \
@@ -122,6 +125,9 @@ $(BUILD)/%.o: src/interrupts/%.c | $(BUILD)
 $(BUILD)/%.o: src/memory/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/driver_api.o: src/drivers/driver_api.c | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
 $(BUILD)/%.o: src/util/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
@@ -138,6 +144,7 @@ KERNEL_OBJS = \
 $(CORE_OBJS) \
 $(INTERRUPT_OBJS) \
 $(MEMORY_OBJS) \
+$(DRIVER_OBJS) \
 $(FS_OBJS) \
 $(APP_OBJS)
 

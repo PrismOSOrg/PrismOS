@@ -144,7 +144,7 @@ The compiler emits Prism app containers with a BCVM bytecode payload, and PrismO
 PrismOS now includes an in-OS subset C compiler command:
 
 ```text
-cc <input.c> <output.app>
+cc <input.c> <output.app|output.pdr>
 ```
 
 Example flow from PrismOS shell:
@@ -156,6 +156,18 @@ app-run /HELLO.APP
 ```
 
 This uses the same subset language as `prismcc` and compiles directly on the PrismOS filesystem.
+
+### PrismCC driver modules
+
+The in-OS compiler can also create cooperative PrismCC driver packages. A driver source defines `int driver_init()`, `void driver_poll()`, `void driver_shutdown()`, and `int main()`. Its `main()` calls initialization, polls until `driver_should_stop()` observes Esc, then shuts down.
+
+```text
+mkdir /DRIVERS
+cc /SERDRV.C /DRIVERS/SERIAL.PDR
+driver-run /DRIVERS/SERIAL.PDR
+```
+
+Driver-only built-ins provide COM1 serial read/write, allowlisted COM1 port I/O (`0x3F8..0x3FF`), and checked 32-bit MMIO access to regions explicitly registered by trusted kernel code. The PrismOS FAT32 volume uses 8.3 names, so driver packages use the `.PDR` suffix. See [PRISMCC_COMPILER_FEATURES.md](PRISMCC_COMPILER_FEATURES.md) and [examples/serdrv.c](examples/serdrv.c) for the ABI and sample; copy the source to `/SERDRV.C` first. Drivers execute in the kernel's shared address space without process isolation; load only trusted code. The standalone `make prismcc` host compiler remains the small app-only compiler; compile driver packages with PrismOS's `cc` command.
 
 ## Built-in Banking App
 

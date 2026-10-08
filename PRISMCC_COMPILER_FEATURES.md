@@ -145,6 +145,33 @@ Path strings are passed directly to VFS operations in the VM.
 Program data convention:
 - Store app data files under `/DATA` (or `/DATA/APPS` for grouped app data).
 
+## PrismCC Driver Modules
+
+The in-OS compiler can build a cooperative driver package when the output filename ends in `.pdr` (`.pdrv` is also recognized on filesystems that support four-character extensions). The PrismOS FAT32 implementation uses 8.3 names, so `.pdr` is the supported on-disk suffix:
+
+```text
+mkdir /DRIVERS
+cc /SERDRV.C /DRIVERS/SERIAL.PDR
+driver-run /DRIVERS/SERIAL.PDR
+```
+
+Driver sources must define zero-argument `int driver_init()`, `void driver_poll()`, `void driver_shutdown()`, and `int main()` functions. `main()` owns the lifecycle: initialize, poll until `driver_should_stop()` returns nonzero, and shut down. Press Esc to request a stop. The compiler validates these entry points and sets the driver package flag; `app-run` refuses driver packages.
+
+Driver hardware built-ins are compiled into BCVM host calls and are enabled only by `driver-run`:
+
+- `driver_serial_write(string)` -> returns `0` on success, `-1` on invalid context/input.
+- `driver_serial_read()` -> reads one queued COM1 byte, or `-1` if none is available.
+- `driver_io_read8(port)` -> reads a byte from the allowlisted COM1 I/O range `0x3F8..0x3FF`; returns `-1` outside it.
+- `driver_io_write8(port, value)` -> writes one byte in the COM1 range; returns `0` or `-1`.
+- `driver_mmio_read32(address)` / `driver_mmio_write32(address, value)` -> access aligned 32-bit addresses only inside MMIO ranges registered by trusted kernel code through `driver_mmio_register_region()`.
+- `driver_should_stop()` -> nonblocking check for the Esc stop request.
+
+The C driver API in `src/drivers/driver_api.h` is the kernel-side extension point for adding device-specific port windows, MMIO mappings, and services. The PrismCC MMIO operations do not accept arbitrary addresses; a kernel driver must register a region first. PrismCC drivers run in the kernel's shared address space with no ring-3 isolation, so only trusted code should be loaded. They must not execute blocking loops in interrupt context; bytecode drivers are cooperative and are never called from an ISR.
+
+The COM1 example at `examples/serdrv.c` polls the UART line-status/data registers and echoes received bytes. It temporarily disables UART receive IRQs to avoid competing with the kernel's UART IRQ handler and restores them in `driver_shutdown()`. Place a copy at `/SERDRV.C` on the PrismOS volume before compiling.
+
+The standalone host tool `make prismcc` remains the minimal one-function app compiler. `.pdr`/`.pdrv` modules and driver host calls are supported by the in-OS compiler command `cc`.
+
 ## Arrays
 
 - Fixed-size declaration with constant positive size (`int a[16];`, `float a[16];`, `string a[16];`, `struct T a[16];`)

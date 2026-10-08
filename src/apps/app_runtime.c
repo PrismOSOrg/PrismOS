@@ -66,3 +66,14 @@ int app_runtime_run(const uint8_t* image, uint32_t image_size, const char* args)
     ERROR_LOG("app runtime unknown app id");
     return -1;
 }
+
+int app_runtime_run_driver(const uint8_t* image, uint32_t image_size, const char* args) {
+    if (image == 0 || image_size < 4U
+        || image[0] != 'B' || image[1] != 'C' || image[2] != 'V' || image[3] != 'M') {
+        ERROR_LOG("driver runtime rejected non-BCVM image");
+        return -1;
+    }
+
+    DEBUG_LOG("app runtime dispatching PrismCC driver");
+    return bytecode_vm_run_driver(image, image_size, args == 0 ? "" : args);
+}
