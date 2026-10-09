@@ -2,6 +2,7 @@
 
 #include "net/arp.h"
 #include "net/dhcp.h"
+#include "net/dns.h"
 #include "net/ethernet.h"
 #include "net/drivers/e1000.h"
 #include "net/icmp.h"
@@ -48,6 +49,7 @@ int network_init(void) {
     arp_init();
     ipv4_init();
     udp_init();
+    dns_init();
     dhcp_init();
     icmp_init();
     tcp_init();

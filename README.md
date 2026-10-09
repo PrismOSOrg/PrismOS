@@ -109,19 +109,36 @@ is active, to help prevent simultaneous access or accidental data deletion.
 The initial network driver supports the QEMU-compatible Intel e1000 adapter
 using PCI discovery and polled DMA rings. Start it with `make run-net` (or
 `make run-net-serial` to see boot diagnostics over COM1). The guest requests an
-IPv4 lease from DHCP at startup; `net status` shows its address, mask, gateway,
-DNS server, and DHCP state. Use `net dhcp` to restart negotiation, `net arp
-10.0.2.2` to resolve QEMU's user-network gateway, and `ping 10.0.2.2` to test
-ICMP Echo. The stack validates IPv4 and transport checksums, dispatches UDP,
-ICMP, and TCP, and responds to ARP requests for its leased address.
+IPv4 lease from DHCP at startup. Run `net` (or `net ui`) to open the full-screen
+network manager. It shows live interface, address, DHCP, TCP, and traffic
+status. Use Up/Down plus Enter, number keys 1-9 or 0, or the displayed shortcuts
+to ping, restart DHCP, connect/send/read/close a TCP session, resolve a hostname,
+fetch an HTTP page, or refresh the dashboard. Press Esc or Q to return to the shell.
+`net status`, `net dhcp`, `net arp 10.0.2.2`, and `ping 10.0.2.2` remain
+available as direct command-line diagnostics. The stack validates IPv4 and
+transport checksums, dispatches UDP, ICMP, and TCP, and responds to ARP requests
+for its leased address.
+
+Use the Network Manager's **Resolve a hostname** action to query the DNS server
+supplied by DHCP, or **Fetch an HTTP page** to issue a GET request (port 80 is
+pre-filled). HTTP displays the status and a sanitized response preview. The
+reusable interfaces are `dns_resolve_ipv4()` in `src/net/dns.h` and `http_get()`
+in `src/net/http.h`; HTTP writes the response body into a caller-owned buffer
+and reports status, body length, and content type. The resolver has a small TTL
+cache. HTTP supports Content-Length, chunked, and close-delimited response
+bodies, subject to the fixed memory limits. These APIs are intended as the
+transport foundation for a future package manager, which can persist downloads
+through the VFS. HTTPS/TLS, certificate validation, redirects, and concurrent
+transfers are not implemented.
 
 The TCP diagnostic is a single outbound client connection: `net tcp connect
 <IPv4> <port>`, `net tcp send <text>`, `net tcp read`, and `net tcp close`.
 It implements a basic handshake, acknowledgements, bounded data buffering, and
 retransmission. It is not a general-purpose TCP implementation: there is no
 listener/server API, congestion control, window scaling, IP fragmentation,
-DNS resolver, or multiple concurrent connections. DHCP obtains a lease and
-renews/rebinds it, but no DNS lookup command or UDP shell client is provided.
+or multiple concurrent connections. The current HTTP client inherits the
+single-connection and 512-byte TCP segment/receive-buffer constraints; it polls
+and drains that buffer while receiving a response.
 
 ## Command help
 

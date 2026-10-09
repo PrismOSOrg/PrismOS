@@ -331,6 +331,27 @@ int tcp_read(uint8_t* buffer, uint16_t capacity, uint16_t* out_length) {
     return 0;
 }
 
+int tcp_read_wait(uint8_t* buffer, uint16_t capacity, uint16_t* out_length,
+    uint32_t timeout_ms) {
+    uint32_t started;
+    if (buffer == 0 || out_length == 0 || capacity == 0U) {
+        return -1;
+    }
+    started = system_uptime_ms();
+    while (connection.receive_length == 0U) {
+        if (connection.state == TCP_STATE_CLOSE_WAIT || connection.state == TCP_STATE_RESET
+            || connection.state == TCP_STATE_TIME_WAIT || connection.state == TCP_STATE_CLOSED) {
+            return -2;
+        }
+        if ((uint32_t)(system_uptime_ms() - started) >= timeout_ms) {
+            return -3;
+        }
+        network_poll();
+        __asm__ volatile ("hlt");
+    }
+    return tcp_read(buffer, capacity, out_length);
+}
+
 int tcp_close(uint32_t timeout_ms) {
     uint32_t started;
     if (connection.state == TCP_STATE_CLOSE_WAIT) {

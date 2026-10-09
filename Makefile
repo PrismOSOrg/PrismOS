@@ -68,8 +68,10 @@ $(BUILD)/arp.o \
 $(BUILD)/ipv4.o \
 $(BUILD)/udp.o \
 $(BUILD)/dhcp.o \
+$(BUILD)/dns.o \
 $(BUILD)/icmp.o \
 $(BUILD)/tcp.o \
+$(BUILD)/http.o \
 $(BUILD)/e1000.o
 
 FS_OBJS = \
@@ -85,6 +87,7 @@ $(BUILD)/bytecode_vm.o \
 $(BUILD)/prismcc_runtime.o \
 $(BUILD)/help_app.o \
 $(BUILD)/partition_manager_app.o \
+$(BUILD)/network_manager_app.o \
 $(BUILD)/editor_app.o \
 $(BUILD)/ide_app.o \
 $(BUILD)/bank_app.o \

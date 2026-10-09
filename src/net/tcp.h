@@ -19,6 +19,9 @@ tcp_state_t tcp_get_state(void);
 int tcp_connect(const uint8_t address[4], uint16_t port, uint32_t timeout_ms);
 int tcp_send(const uint8_t* data, uint16_t length, uint32_t timeout_ms);
 int tcp_read(uint8_t* buffer, uint16_t capacity, uint16_t* out_length);
+/* Returns 0 with data, -2 on peer close/reset, or -3 on timeout. */
+int tcp_read_wait(uint8_t* buffer, uint16_t capacity, uint16_t* out_length,
+    uint32_t timeout_ms);
 int tcp_close(uint32_t timeout_ms);
 
 #endif

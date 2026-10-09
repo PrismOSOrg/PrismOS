@@ -17,6 +17,7 @@
 #include "net/tcp.h"
 #include "apps/app_manager.h"
 #include "apps/help_app.h"
+#include "apps/network_manager_app.h"
 #include "apps/partition_manager_app.h"
 #include "apps/prismcc_runtime.h"
 
@@ -175,7 +176,7 @@ static const Command commands[] = {
     {{"ls", "Lists files and subdirectories in the current directory or in a specified path, including file sizes.", "ls [path]", "path: optional directory path; defaults to the current directory.", "ls /DATA"}, command_ls},
     {{"mkdir", "Creates a new directory at the given path on the active FAT32 volume.", "mkdir <path>", "path: directory path to create; its parent directory must already exist.", "mkdir /DOCS"}, command_mkdir},
     {{"mv", "Moves or renames a file by copying it and then removing the source. Directory moves are not supported; file size is limited by the move buffer.", "mv <source> <destination>", "source: existing file path. destination: new file path; it must not be a directory.", "mv /OLD.TXT /NEW.TXT"}, command_mv},
-    {{"net", "Shows network configuration, controls DHCP, sends ARP requests, or exercises TCP.", "net [status|poll|rx|arp <IPv4>|dhcp|tcp connect <IPv4> <port>|tcp send <text>|tcp read|tcp close]", "status: interfaces, IPv4 configuration, and DHCP state. dhcp: restart address negotiation. tcp: connect to a remote service, send/read bytes, or close the client connection.", "net tcp connect 10.0.2.2 80"}, command_net},
+    {{"net", "Opens the interactive network manager, including DNS lookup and HTTP GET actions, or runs a scripted network diagnostic.", "net [ui|status|poll|rx|arp <IPv4>|dhcp|tcp connect <IPv4> <port>|tcp send <text>|tcp read|tcp close]", "No arguments or ui: open the dashboard for ping, DHCP, TCP, DNS, and HTTP actions. status, poll, rx, arp, dhcp, and tcp: use the matching text diagnostics/actions.", "net"}, command_net},
     {{"partitions", "Opens the interactive disk and partition manager, with text commands available for scripting.", "partitions [ui|list|mount <slot>|create <sizeMiB>|shrink <slot> <reduceByMiB>|delete <slot>|rename <slot> <label>]", "No arguments or ui: open the full-screen manager. list: show a text overview. mount: select a formatted FAT32 volume by 1-based MBR slot; this is different from a physical drive index. create: size in MiB; the new partition is unformatted. shrink: reclaim this many MiB from the free tail of the mounted FAT32 primary partition. delete: 1-based MBR slot; data is not erased. rename: change the mounted FAT32 volume label.", "partitions mount 2"}, command_partitions},
     {{"ping", "Sends an ICMP Echo Request and waits for a matching Echo Reply.", "ping <IPv4>", "IPv4: destination address; DHCP must have configured this interface first.", "ping 10.0.2.2"}, command_ping},
     {{"reboot", "Immediately restarts the computer or emulator. Unsaved filesystem or editor changes may be lost.", "reboot", "None.", "reboot"}, command_reboot},
@@ -719,7 +720,15 @@ static void command_net(const char* arguments) {
     const char* remainder = 0;
     int interface_count = network_interface_count();
 
-    if (*skip_spaces(arguments) == '\0' || string_equals(skip_spaces(arguments), "status")) {
+    if (*skip_spaces(arguments) == '\0') {
+        (void)network_manager_app_run();
+        return;
+    }
+    if (string_equals(skip_spaces(arguments), "ui")) {
+        (void)network_manager_app_run();
+        return;
+    }
+    if (string_equals(skip_spaces(arguments), "status")) {
         ipv4_configuration_t configuration;
         if (interface_count <= 0) {
             console_writeln("No supported network interface detected. Use make run-net with QEMU e1000.");
