@@ -1,6 +1,0 @@
-{
-  "id": "hello",
-  "version": "1.0.0",
-  "description": "Small repository smoke-test package",
-  "file": "hello.prpkg"
-}
