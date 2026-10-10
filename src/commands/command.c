@@ -18,6 +18,7 @@
 #include "apps/app_manager.h"
 #include "apps/help_app.h"
 #include "apps/network_manager_app.h"
+#include "apps/package_manager.h"
 #include "apps/partition_manager_app.h"
 #include "apps/prismcc_runtime.h"
 
@@ -92,6 +93,7 @@ static void command_partitions(const char* arguments);
 static void command_drive(const char* arguments);
 static void command_net(const char* arguments);
 static void command_ping(const char* arguments);
+static void command_pkg(const char* arguments);
 
 static char command_cwd[COMMAND_PATH_CAPACITY] = "/";
 
@@ -179,6 +181,7 @@ static const Command commands[] = {
     {{"net", "Opens the interactive network manager, including DNS lookup and HTTP GET actions, or runs a scripted network diagnostic.", "net [ui|status|poll|rx|arp <IPv4>|dhcp|tcp connect <IPv4> <port>|tcp send <text>|tcp read|tcp close]", "No arguments or ui: open the dashboard for ping, DHCP, TCP, DNS, and HTTP actions. status, poll, rx, arp, dhcp, and tcp: use the matching text diagnostics/actions.", "net"}, command_net},
     {{"partitions", "Opens the interactive disk and partition manager, with text commands available for scripting.", "partitions [ui|list|mount <slot>|create <sizeMiB>|shrink <slot> <reduceByMiB>|delete <slot>|rename <slot> <label>]", "No arguments or ui: open the full-screen manager. list: show a text overview. mount: select a formatted FAT32 volume by 1-based MBR slot; this is different from a physical drive index. create: size in MiB; the new partition is unformatted. shrink: reclaim this many MiB from the free tail of the mounted FAT32 primary partition. delete: 1-based MBR slot; data is not erased. rename: change the mounted FAT32 volume label.", "partitions mount 2"}, command_partitions},
     {{"ping", "Sends an ICMP Echo Request and waits for a matching Echo Reply.", "ping <IPv4>", "IPv4: destination address; DHCP must have configured this interface first.", "ping 10.0.2.2"}, command_ping},
+    {{"pkg", "Opens the package manager, or lists, inspects, installs, removes, and favorites repository packages.", "pkg [ui|list]", "No arguments or ui: open the package manager window. list: print the package catalog.", "pkg"}, command_pkg},
     {{"reboot", "Immediately restarts the computer or emulator. Unsaved filesystem or editor changes may be lost.", "reboot", "None.", "reboot"}, command_reboot},
     {{"rm", "Removes a file from the active FAT32 volume. Use rmdir for an empty directory.", "rm <path>", "path: existing file path; directories are not accepted.", "rm /OLD.TXT"}, command_rm},
     {{"rmdir", "Removes an empty directory. The operation fails if the directory contains entries.", "rmdir <path>", "path: existing empty directory path.", "rmdir /EMPTY"}, command_rmdir},
@@ -1431,6 +1434,25 @@ static void command_app_run(const char* arguments) {
 
     if (app_manager_run_path(absolute, remainder) != 0) {
         console_writeln("app execution failed");
+    }
+}
+
+static void command_pkg(const char* arguments) {
+    char operation[COMMAND_TOKEN_CAPACITY];
+    const char* remainder = 0;
+
+    if (parse_token(arguments, operation, sizeof(operation), &remainder) != 0) {
+        package_manager_run();
+        return;
+    }
+    if (*remainder != '\0') {
+        console_writeln("Usage: pkg [ui|list]");
+    } else if (string_equals(operation, "ui")) {
+        package_manager_run();
+    } else if (string_equals(operation, "list")) {
+        (void)package_manager_list();
+    } else {
+        console_writeln("Usage: pkg [ui|list]");
     }
 }
 

@@ -129,22 +129,26 @@ static void ipv4_receive(network_interface_t* interface, const uint8_t source_ma
     if (header_length < IPV4_HEADER_SIZE || header_length > packet_length
         || total_length < header_length || total_length > packet_length
         || ipv4_checksum(packet, header_length) != 0U) {
+        if (packet_length >= IPV4_HEADER_SIZE && packet[9U] == IPV4_PROTOCOL_TCP)
+            DEBUG_LOG("ipv4: dropped TCP packet with invalid IPv4 header/checksum/length");
         return;
     }
+    protocol = packet[9U];
     fragment = read_be16(&packet[6U]);
     if ((fragment & IPV4_FRAGMENT_MASK) != 0U) {
+        if (protocol == IPV4_PROTOCOL_TCP) DEBUG_LOG("ipv4: dropped fragmented TCP packet");
         return;
     }
     source = &packet[12U];
     destination = &packet[16U];
     if (!ipv4_is_broadcast(destination)
         && (!ipv4_is_configured() || !address_equal(destination, active_configuration.address))) {
+        if (protocol == IPV4_PROTOCOL_TCP) DEBUG_LOG("ipv4: dropped TCP packet for a different IP address");
         return;
     }
     if (!address_is_zero(source)) {
         arp_learn_ipv4(source, source_mac);
     }
-    protocol = packet[9U];
     for (uint32_t index = 0U; index < protocol_handler_count; index++) {
         if (protocol_numbers[index] == protocol) {
             protocol_handlers[index](interface, source, destination,

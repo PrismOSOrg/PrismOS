@@ -190,12 +190,18 @@ static int http_parse_response(const uint8_t* raw, uint32_t raw_length,
     uint8_t chunked = 0U;
     uint32_t body_available;
 
-    if (http_find_header_end(raw, raw_length, &body_offset) != 0) return -1;
+    if (http_find_header_end(raw, raw_length, &body_offset) != 0) {
+        DEBUG_LOG("http: response has no complete header terminator");
+        return -1;
+    }
     header_end = body_offset - 4U;
     uint32_t status_line_end = 0U;
     while (status_line_end + 1U < header_end
         && !(raw[status_line_end] == '\r' && raw[status_line_end + 1U] == '\n')) status_line_end++;
-    if (http_parse_status(raw, status_line_end, &response->status_code) != 0) return -1;
+    if (http_parse_status(raw, status_line_end, &response->status_code) != 0) {
+        DEBUG_LOG("http: invalid status line");
+        return -1;
+    }
 
     for (uint32_t line = status_line_end + 2U; line + 1U < header_end;) {
         uint32_t line_end = line;
@@ -208,7 +214,10 @@ static int http_parse_response(const uint8_t* raw, uint32_t raw_length,
             uint32_t value = colon + 1U;
             while (value < line_end && (raw[value] == ' ' || raw[value] == '\t')) value++;
             if (http_equal_case(&raw[line], colon - line, "Content-Length")) {
-                if (http_parse_decimal(&raw[value], line_end - value, &content_length) != 0) return -1;
+                if (http_parse_decimal(&raw[value], line_end - value, &content_length) != 0) {
+                    DEBUG_LOG("http: invalid Content-Length header");
+                    return -1;
+                }
                 have_content_length = 1U;
             } else if (http_equal_case(&raw[line], colon - line, "Transfer-Encoding")) {
                 chunked = (uint8_t)http_contains_case(&raw[value], line_end - value, "chunked");
@@ -221,7 +230,10 @@ static int http_parse_response(const uint8_t* raw, uint32_t raw_length,
 
     if (chunked) {
         if (http_decode_chunks(&raw[body_offset], body_available, response->body,
-            response->body_capacity, &response->body_length) != 0) return -1;
+            response->body_capacity, &response->body_length) != 0) {
+            DEBUG_LOG("http: invalid chunked response body");
+            return -1;
+        }
     } else {
         uint32_t copy_length = body_available;
         if (have_content_length) {
@@ -300,6 +312,7 @@ int http_get(const char* hostname, const char* path, uint16_t port,
         DEBUG_LOG("http: request transmission failed");
         return -4;
     }
+    DEBUG_LOG("http: request sent and acknowledged");
 
     started = system_uptime_ms();
     while (raw_length < sizeof(raw_response)) {
@@ -313,15 +326,20 @@ int http_get(const char* hostname, const char* path, uint16_t port,
         result = tcp_read_wait(chunk, sizeof(chunk), &chunk_length, timeout_ms - elapsed);
         if (result == -2) break;
         if (result != 0) {
+            DEBUG_LOG(raw_length == 0U
+                ? "http: timed out waiting for the first response bytes"
+                : "http: timed out waiting for the rest of the response");
             (void)tcp_close(1000U);
             return -5;
         }
+        DEBUG_LOG("http: received a TCP response payload");
         for (uint32_t index = 0U; index < chunk_length; index++) {
             raw_response[raw_length++] = chunk[index];
         }
     }
     (void)tcp_close(1000U);
     DEBUG_LOG("http: response stream complete");
+    if (raw_length == 0U) DEBUG_LOG("http: peer closed without sending response bytes");
     result = http_parse_response(raw_response, raw_length, response);
     if (result == -2) {
         DEBUG_LOG("http: incomplete Content-Length body");

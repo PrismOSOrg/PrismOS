@@ -173,6 +173,7 @@ static void e1000_poll(void* context) {
                 descriptor->length);
         } else {
             state->interface->stats.receive_errors++;
+            DEBUG_LOG("e1000: rejected RX descriptor because packet status or errors were invalid");
         }
 
         descriptor->status = 0U;

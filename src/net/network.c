@@ -131,9 +131,13 @@ int network_submit_received_frame(network_interface_t* interface, const uint8_t*
         }
         return -1;
     }
+    /* The protocol stack consumes this frame synchronously below. Keep a bounded
+       raw-frame history for network_receive_frame(), but do not let that optional
+       history stop TCP/IP from receiving packets once its ring is full. */
     if (receive_count >= NETWORK_RX_QUEUE_SIZE) {
+        receive_tail = (receive_tail + 1U) % NETWORK_RX_QUEUE_SIZE;
+        receive_count--;
         interface->stats.dropped_frames++;
-        return -1;
     }
 
     entry = &receive_queue[receive_head];

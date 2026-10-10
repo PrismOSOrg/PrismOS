@@ -88,6 +88,9 @@ $(BUILD)/prismcc_runtime.o \
 $(BUILD)/help_app.o \
 $(BUILD)/partition_manager_app.o \
 $(BUILD)/network_manager_app.o \
+$(BUILD)/package_manager.o \
+$(BUILD)/package_manager_app.o \
+$(BUILD)/sha256.o \
 $(BUILD)/editor_app.o \
 $(BUILD)/ide_app.o \
 $(BUILD)/bank_app.o \

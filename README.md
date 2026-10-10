@@ -131,6 +131,22 @@ transport foundation for a future package manager, which can persist downloads
 through the VFS. HTTPS/TLS, certificate validation, redirects, and concurrent
 transfers are not implemented.
 
+authentication are not implemented yet. The repository uses plain HTTP, so do
+Run `pkg` to open the full-screen package manager, or `pkg list` for a shell
+catalog listing. The manager retrieves and validates catalog and manifest
+metadata, supports local favorites, downloads package chunks, verifies the
+manifest SHA-256, validates the PrismOS app header, installs app files under
+`/PKGS`, and can uninstall packages it installed. Package downloads are capped
+at 64 KiB to fit current OS loader and memory limits. Favorites and installed
+package records are stored on the mounted drive. Start the server in
+`backendapi/` with `dotnet run --urls http://0.0.0.0:8080`, then boot with
+`make run-net`; QEMU's guest reaches the host at `10.0.2.2`. In the UI, use
+Up/Down to select, Enter for details, I to install, U twice to uninstall, F to
+favorite, R to refresh, and Esc/Q to exit. The repository uses plain HTTP and
+does not authenticate packages: SHA-256 detects transfer mismatches but does
+not prove who published a package. Only install software from a repository you
+trust.
+
 The TCP diagnostic is a single outbound client connection: `net tcp connect
 <IPv4> <port>`, `net tcp send <text>`, `net tcp read`, and `net tcp close`.
 It implements a basic handshake, acknowledgements, bounded data buffering, and

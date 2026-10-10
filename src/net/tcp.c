@@ -142,12 +142,16 @@ static void tcp_receive(network_interface_t* interface, const uint8_t source[4],
     if (packet == 0 || packet_length < TCP_HEADER_SIZE
         || ipv4_transport_checksum(source, destination, IPV4_PROTOCOL_TCP,
             packet, packet_length) != 0U) {
+        if (connection.state == TCP_STATE_SYN_SENT || connection.state == TCP_STATE_ESTABLISHED)
+            DEBUG_LOG("tcp: incoming segment failed validation or checksum");
         return;
     }
     source_port = read_be16(&packet[0U]);
     destination_port = read_be16(&packet[2U]);
     if (connection.state == TCP_STATE_CLOSED || destination_port != connection.local_port
         || source_port != connection.peer_port || !address_equal(source, connection.peer_address)) {
+        if (connection.state == TCP_STATE_SYN_SENT || connection.state == TCP_STATE_ESTABLISHED)
+            DEBUG_LOG("tcp: incoming segment did not match active peer tuple");
         return;
     }
     header_length = (uint16_t)((packet[12U] >> 4) * 4U);
@@ -161,6 +165,7 @@ static void tcp_receive(network_interface_t* interface, const uint8_t source[4],
     if ((flags & TCP_FLAG_RST) != 0U) {
         connection.state = TCP_STATE_RESET;
         connection.outstanding = 0U;
+        DEBUG_LOG("tcp: peer sent RST");
         return;
     }
 
@@ -175,6 +180,12 @@ static void tcp_receive(network_interface_t* interface, const uint8_t source[4],
         return;
     }
 
+    if (connection.state == TCP_STATE_SYN_SENT
+        && (flags & (TCP_FLAG_SYN | TCP_FLAG_ACK)) == (TCP_FLAG_SYN | TCP_FLAG_ACK)) {
+        DEBUG_LOG("tcp: SYN-ACK acknowledgement did not match the outstanding SYN");
+        return;
+    }
+
     if ((flags & TCP_FLAG_ACK) != 0U
         && (int32_t)(acknowledgement - connection.send_unacknowledged) >= 0
         && (int32_t)(connection.send_next - acknowledgement) >= 0) {
@@ -184,6 +195,8 @@ static void tcp_receive(network_interface_t* interface, const uint8_t source[4],
         }
     }
     if (sequence != connection.receive_next) {
+        if (data_length != 0U || (flags & TCP_FLAG_FIN) != 0U)
+            DEBUG_LOG("tcp: incoming payload or FIN had an unexpected sequence number");
         if (data_length != 0U || (flags & TCP_FLAG_FIN) != 0U) {
             tcp_send_ack();
         }
@@ -204,6 +217,7 @@ static void tcp_receive(network_interface_t* interface, const uint8_t source[4],
         connection.receive_next++;
         connection.state = connection.state == TCP_STATE_FIN_WAIT
             ? TCP_STATE_TIME_WAIT : TCP_STATE_CLOSE_WAIT;
+        DEBUG_LOG("tcp: peer sent FIN");
         tcp_send_ack();
     }
 }
@@ -243,9 +257,11 @@ int tcp_connect(const uint8_t address[4], uint16_t port, uint32_t timeout_ms) {
 
     if (address == 0 || port == 0U || interface == 0 || !interface->link_up
         || (connection.state != TCP_STATE_CLOSED && connection.state != TCP_STATE_RESET)) {
+        DEBUG_LOG("tcp: connect rejected because interface or connection state is not ready");
         return -1;
     }
     if (ipv4_resolve(address, timeout_ms, mac_address) != 0) {
+        DEBUG_LOG("tcp: ARP resolution failed during connect");
         return -2;
     }
     connection.state = TCP_STATE_SYN_SENT;
@@ -264,6 +280,7 @@ int tcp_connect(const uint8_t address[4], uint16_t port, uint32_t timeout_ms) {
     connection.receive_length = 0U;
     if (tcp_send_control(TCP_FLAG_SYN, 1) != 0) {
         connection.state = TCP_STATE_CLOSED;
+        DEBUG_LOG("tcp: SYN transmission failed");
         return -3;
     }
     started = system_uptime_ms();
@@ -278,7 +295,13 @@ int tcp_connect(const uint8_t address[4], uint16_t port, uint32_t timeout_ms) {
     connection.outstanding = 0U;
     if (connection.state == TCP_STATE_SYN_SENT) {
         connection.state = TCP_STATE_CLOSED;
+        DEBUG_LOG("tcp: connection handshake timed out");
         return -4;
+    }
+    if (connection.state == TCP_STATE_RESET) {
+        DEBUG_LOG("tcp: connection attempt was reset by the peer");
+    } else {
+        DEBUG_LOG("tcp: connection handshake ended in an unexpected state");
     }
     return -5;
 }
@@ -341,6 +364,7 @@ int tcp_read_wait(uint8_t* buffer, uint16_t capacity, uint16_t* out_length,
     while (connection.receive_length == 0U) {
         if (connection.state == TCP_STATE_CLOSE_WAIT || connection.state == TCP_STATE_RESET
             || connection.state == TCP_STATE_TIME_WAIT || connection.state == TCP_STATE_CLOSED) {
+            DEBUG_LOG("tcp: peer closed and no buffered response data remains");
             return -2;
         }
         if ((uint32_t)(system_uptime_ms() - started) >= timeout_ms) {
