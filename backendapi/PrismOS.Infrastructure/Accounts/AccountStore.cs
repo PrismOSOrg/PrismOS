@@ -3,10 +3,12 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
+using PrismOS.Application.Accounts;
+using PrismOS.Domain.Accounts;
 
-namespace PrismPackageRepo;
+namespace PrismOS.Infrastructure.Accounts;
 
-internal sealed class AccountStore
+public sealed class AccountStore : IAccountStore
 {
     private const int PasswordIterations = 310_000;
     private const int SchemaVersion = 1;
@@ -525,21 +527,4 @@ internal sealed class AccountStore
     private sealed class LegacyUserDownloadStat : LegacyDownloadStat
     {
     }
-}
-
-internal abstract class DownloadStatBase
-{
-    public string Id { get; set; } = string.Empty;
-    public string Version { get; set; } = string.Empty;
-    public long DownloadStarts { get; set; }
-    public long BytesServed { get; set; }
-    public DateTimeOffset LastRequestedUtc { get; set; }
-}
-
-internal sealed class PackageDownloadStat : DownloadStatBase
-{
-}
-
-internal sealed class UserDownloadStat : DownloadStatBase
-{
 }

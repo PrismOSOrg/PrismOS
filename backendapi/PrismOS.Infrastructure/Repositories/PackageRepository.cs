@@ -3,10 +3,12 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Collections.Concurrent;
+using PrismOS.Application.Repositories;
+using PrismOS.Domain.Packages;
 
-namespace PrismPackageRepo;
+namespace PrismOS.Infrastructure.Repositories;
 
-internal sealed class PackageRepository
+public sealed class PackageRepository : IPackageRepository
 {
     private static readonly Regex SafeSegment = new("^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly JsonSerializerOptions ManifestJsonOptions = new()
@@ -17,13 +19,20 @@ internal sealed class PackageRepository
     private readonly SemaphoreSlim _publishGate = new(1, 1);
     private readonly string _root;
     private readonly int _chunkSize;
+    private readonly int _maxCatalogBytes;
+    private readonly int _maxUploadBytes;
+    private readonly long _maxRepositoryBytes;
     private byte[] _catalog;
 
     private PackageRepository(string root, int chunkSize, int maxCatalogBytes,
+        int maxUploadBytes, long maxRepositoryBytes,
         Dictionary<(string Id, string Version), PackageRecord> packages)
     {
         _root = root;
         _chunkSize = chunkSize;
+        _maxCatalogBytes = maxCatalogBytes;
+        _maxUploadBytes = maxUploadBytes;
+        _maxRepositoryBytes = maxRepositoryBytes;
         _packages = new ConcurrentDictionary<(string Id, string Version), PackageRecord>(packages);
         _catalog = BuildCatalog(_packages.Values);
         if (_catalog.Length > maxCatalogBytes)
@@ -35,7 +44,8 @@ internal sealed class PackageRepository
     public ReadOnlyMemory<byte> Catalog => Volatile.Read(ref _catalog);
 
     public static async Task<PackageRepository> LoadAsync(string packagesPath, int chunkSize,
-        int maxCatalogBytes, CancellationToken cancellationToken = default)
+        int maxCatalogBytes, int maxUploadBytes, long maxRepositoryBytes,
+        CancellationToken cancellationToken = default)
     {
         if (chunkSize is < 1 or > 4096)
         {
@@ -45,6 +55,10 @@ internal sealed class PackageRepository
         {
             throw new InvalidDataException("Repository:MaxCatalogBytes must be between 128 and 8192 bytes.");
         }
+        if (maxUploadBytes is < 1 or > 256 * 1024 * 1024)
+            throw new InvalidDataException("Repository:MaxUploadBytes must be between 1 byte and 256 MiB.");
+        if (maxRepositoryBytes < maxUploadBytes || maxRepositoryBytes > 16L * 1024 * 1024 * 1024)
+            throw new InvalidDataException("Repository:MaxRepositoryBytes must be at least MaxUploadBytes and at most 16 GiB.");
 
         string root = Path.GetFullPath(packagesPath);
         Directory.CreateDirectory(root);
@@ -96,7 +110,8 @@ internal sealed class PackageRepository
             }
         }
 
-        return new PackageRepository(root, chunkSize, maxCatalogBytes, records);
+        return new PackageRepository(root, chunkSize, maxCatalogBytes, maxUploadBytes,
+            maxRepositoryBytes, records);
     }
 
     public bool TryGetPackage(string id, string version, out PackageRecord? package)
@@ -145,12 +160,11 @@ internal sealed class PackageRepository
     }
 
     public async Task<PublishPackageResult> PublishAsync(string id, string version, string? description,
-        string uploadedBy, Stream input, long? declaredLength, int maxUploadBytes, long maxRepositoryBytes,
-        int maxCatalogBytes, CancellationToken cancellationToken)
+        string uploadedBy, Stream input, long? declaredLength, CancellationToken cancellationToken)
     {
         if (!IsSafeSegment(id) || !IsSafeSegment(version))
             return new PublishPackageResult(PublishPackageStatus.InvalidMetadata, null);
-        if (declaredLength is < 0 || declaredLength > maxUploadBytes)
+        if (declaredLength is < 0 || declaredLength > _maxUploadBytes)
             return new PublishPackageResult(PublishPackageStatus.TooLarge, null);
 
         id = id.ToLowerInvariant();
@@ -190,7 +204,7 @@ internal sealed class PackageRepository
                     int read;
                     while ((read = await input.ReadAsync(buffer, cancellationToken)) != 0)
                     {
-                        if (totalBytes + read > maxUploadBytes)
+                        if (totalBytes + read > _maxUploadBytes)
                             return new PublishPackageResult(PublishPackageStatus.TooLarge, null);
                         totalBytes += read;
                         hash.AppendData(buffer, 0, read);
@@ -208,17 +222,17 @@ internal sealed class PackageRepository
                 long repositoryBytes = 0;
                 foreach (PackageRecord existing in _packages.Values)
                 {
-                    if (repositoryBytes > maxRepositoryBytes - existing.Size)
+                    if (repositoryBytes > _maxRepositoryBytes - existing.Size)
                         return new PublishPackageResult(PublishPackageStatus.RepositoryFull, null);
                     repositoryBytes += existing.Size;
                 }
-                if (totalBytes > maxRepositoryBytes - repositoryBytes)
+                if (totalBytes > _maxRepositoryBytes - repositoryBytes)
                     return new PublishPackageResult(PublishPackageStatus.RepositoryFull, null);
 
                 var package = new PackageRecord(id, version, cleanDescription, packagePath,
                     totalBytes, digest, uploadedBy);
                 byte[] candidateCatalog = BuildCatalog(_packages.Values.Append(package));
-                if (candidateCatalog.Length > maxCatalogBytes)
+                if (candidateCatalog.Length > _maxCatalogBytes)
                     return new PublishPackageResult(PublishPackageStatus.CatalogFull, null);
 
                 var sourceManifest = new PackageManifestSource(id, version, "package.prpkg",
@@ -290,20 +304,3 @@ internal sealed class PackageRepository
     private sealed record PackageManifestSource(string Id, string Version, string File,
         string? Description, string? UploadedBy = null);
 }
-
-internal sealed record PackageRecord(string Id, string Version, string Description,
-    string Path, long Size, string Sha256, string? UploadedBy);
-
-internal enum PublishPackageStatus
-{
-    Success,
-    InvalidMetadata,
-    AlreadyExists,
-    TooLarge,
-    RepositoryFull,
-    Empty,
-    LengthMismatch,
-    CatalogFull
-}
-
-internal sealed record PublishPackageResult(PublishPackageStatus Status, PackageRecord? Package);

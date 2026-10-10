@@ -1,0 +1,36 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrismOS.Domain", "PrismOS.Domain\PrismOS.Domain.csproj", "{EE09E5D8-4988-4F5F-BF92-92E48FD3E249}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrismOS.Application", "PrismOS.Application\PrismOS.Application.csproj", "{E9DE60CF-2EA4-4301-A85F-1A59F6327766}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrismOS.Infrastructure", "PrismOS.Infrastructure\PrismOS.Infrastructure.csproj", "{B4812B9D-6E45-47A5-BDDE-18093069A718}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrismOS.Web", "PrismOS.Web\PrismOS.Web.csproj", "{62CEB0F7-81B3-4C06-8CF3-A326AA4C0EA1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EE09E5D8-4988-4F5F-BF92-92E48FD3E249}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EE09E5D8-4988-4F5F-BF92-92E48FD3E249}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EE09E5D8-4988-4F5F-BF92-92E48FD3E249}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EE09E5D8-4988-4F5F-BF92-92E48FD3E249}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E9DE60CF-2EA4-4301-A85F-1A59F6327766}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E9DE60CF-2EA4-4301-A85F-1A59F6327766}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E9DE60CF-2EA4-4301-A85F-1A59F6327766}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E9DE60CF-2EA4-4301-A85F-1A59F6327766}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B4812B9D-6E45-47A5-BDDE-18093069A718}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B4812B9D-6E45-47A5-BDDE-18093069A718}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B4812B9D-6E45-47A5-BDDE-18093069A718}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B4812B9D-6E45-47A5-BDDE-18093069A718}.Release|Any CPU.Build.0 = Release|Any CPU
+		{62CEB0F7-81B3-4C06-8CF3-A326AA4C0EA1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{62CEB0F7-81B3-4C06-8CF3-A326AA4C0EA1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{62CEB0F7-81B3-4C06-8CF3-A326AA4C0EA1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{62CEB0F7-81B3-4C06-8CF3-A326AA4C0EA1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

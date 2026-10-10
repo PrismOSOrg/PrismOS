@@ -1,15 +1,18 @@
-namespace PrismPackageRepo;
+using Microsoft.AspNetCore.Mvc;
+using PrismOS.Application.Accounts;
+
+namespace PrismOS.Web.Infrastructure;
 
 internal static class BearerAuth
 {
-    public static IResult Challenge(HttpContext context)
+    public static IActionResult Challenge(HttpContext context)
     {
         context.Response.Headers.WWWAuthenticate = "Bearer";
-        return Results.Unauthorized();
+        return new UnauthorizedResult();
     }
 
     public static async Task<(bool Provided, string? Username)> ResolveAsync(HttpContext context,
-        AccountStore accounts)
+        IAccountStore accounts)
     {
         string authorization = context.Request.Headers.Authorization.ToString();
         if (string.IsNullOrWhiteSpace(authorization)) return (false, null);

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b1020" />
+    <title>@ViewData["Title"] - PrismOS</title>
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body>
+    <header class="site-header">
+        <a class="brand" href="/" aria-label="PrismOS home">
+            <span class="brand-mark" aria-hidden="true">P</span>
+            <span>PrismOS <span class="brand-muted">Packages</span></span>
+        </a>
+        <nav aria-label="Main navigation">
+            <a href="/">Home</a>
+            <a href="/api/v1/catalog">Catalog</a>
+            <a href="/healthz">API status</a>
+        </nav>
+    </header>
+    <main>
+        @RenderBody()
+    </main>
+    <footer class="site-footer">
+        <span>PrismOS Package Repository</span>
+        <span>Package manager API: <a href="/api/v1/catalog">/api/v1</a></span>
+    </footer>
+</body>
+</html>

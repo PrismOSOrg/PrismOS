@@ -1,21 +1,31 @@
 # PrismOS Package Repository
 
-A .NET 10 ASP.NET Core HTTP repository for PrismOS packages. It provides public catalog/download APIs plus registered-user accounts, authenticated uploads, favorites, and download analytics. SQLite stores account data and analytics using `Microsoft.Data.Sqlite`; package blobs and their manifests remain filesystem-backed.
+A .NET 10 ASP.NET Core MVC application for PrismOS packages. It includes a simple landing page; package browsing and account-management UI can be added later. The existing package API routes remain available for PrismOS package-manager clients, providing public catalog/download APIs plus registered-user accounts, authenticated uploads, favorites, and download analytics. SQLite stores account data and analytics using `Microsoft.Data.Sqlite`; package blobs and their manifests remain filesystem-backed.
+
+## Architecture
+
+`PrismPackageRepo.sln` separates the server into four projects:
+
+- `PrismOS.Domain` contains package and download-stat domain models.
+- `PrismOS.Application` defines the package and account repository interfaces.
+- `PrismOS.Infrastructure` implements those interfaces using the package filesystem and SQLite.
+- `PrismOS.Web` hosts the MVC controllers, API, configuration, and dependency wiring.
 
 ## Run locally
 
 From this directory:
 
 ```sh
-dotnet run --urls http://0.0.0.0:8080
+dotnet run --project PrismOS.Web --urls http://0.0.0.0:8080
 ```
 
-The process scans `Packages/` at startup and computes the artifact size and SHA-256 digest. The sample package is available as `hello` version `1.0.0`. Restart the server after changing package files manually. User uploads are indexed immediately.
+The process scans `Packages/` at startup and computes the artifact size and SHA-256 digest. The sample package is available as `hello` version `1.0.0`. Restart the server after changing package files manually. User uploads are indexed immediately. Build the complete backend with `dotnet build PrismPackageRepo.sln`.
 
 For QEMU user-mode networking, the guest can usually reach the host at `10.0.2.2:8080`.
 
 ## HTTP API
 
+- `GET /` — repository landing page.
 - `GET /healthz` — plain-text `ok` health response.
 - `GET /api/v1/catalog` — versioned tab-separated catalog.
 - `GET /api/v1/packages/{id}/{version}/manifest` — versioned tab-separated manifest.
