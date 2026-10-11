@@ -2,6 +2,8 @@
 #include "platform/pic.h"
 #include "debug/log.h"
 #include "display/console.h"
+#include "platform/user_mode.h"
+#include "drivers/driver_api.h"
 
 #include <stddef.h>
 
@@ -11,6 +13,7 @@
 
 static irq_handler_t irq_handlers[IRQ_COUNT];
 static exception_handler_t exception_handlers[EXCEPTION_COUNT];
+static uint8_t driver_irq_references[IRQ_COUNT];
 
 static void console_write_hex32(uint32_t value) {
     char text[9];
@@ -88,6 +91,7 @@ void irq_init(void)
     DEBUG_LOG("irq_init: initializing handler table");
     for (unsigned i = 0; i < IRQ_COUNT; i++) {
         irq_handlers[i] = NULL;
+        driver_irq_references[i] = 0U;
     }
 
     for (unsigned i = 0; i < EXCEPTION_COUNT; i++) {
@@ -108,6 +112,44 @@ void irq_unregister_handler(uint8_t irq)
     if (irq < IRQ_COUNT) {
         DEBUG_LOG("irq_unregister_handler: unregistered handler");
         irq_handlers[irq] = NULL;
+    }
+}
+
+int irq_driver_line_acquire(uint8_t irq)
+{
+    if (irq >= IRQ_COUNT || irq == 0U || irq == 1U || irq == 2U
+        || irq == 4U || irq == 8U || irq_handlers[irq] != NULL
+        || driver_irq_references[irq] != 0U) {
+        return -1;
+    }
+
+    driver_irq_references[irq] = 1U;
+    pic_unmask_irq(irq);
+    return 0;
+}
+
+void irq_driver_line_release(uint8_t irq)
+{
+    if (irq >= IRQ_COUNT || driver_irq_references[irq] == 0U) {
+        return;
+    }
+
+    if (--driver_irq_references[irq] == 0U && irq_handlers[irq] == NULL) {
+        pic_mask_irq(irq);
+    }
+}
+
+void irq_driver_line_mask(uint8_t irq)
+{
+    if (irq < IRQ_COUNT && driver_irq_references[irq] != 0U) {
+        pic_mask_irq(irq);
+    }
+}
+
+void irq_driver_line_ack(uint8_t irq)
+{
+    if (irq < IRQ_COUNT && driver_irq_references[irq] != 0U) {
+        pic_unmask_irq(irq);
     }
 }
 
@@ -134,6 +176,9 @@ void irq_dispatcher(registers_t *regs)
     if (irq < IRQ_COUNT && irq_handlers[irq] != NULL) {
         irq_handlers[irq](regs);
     }
+    if (irq < IRQ_COUNT) {
+        driver_runtime_notify_irq(irq);
+    }
 
     /* Always acknowledge the PIC — even for unhandled IRQs */
     pic_send_eoi(irq);
@@ -144,6 +189,10 @@ void irq_dispatcher(registers_t *regs)
  * by adding a dispatch table here later (e.g. for #PF, #BP). */
 void isr_handler(registers_t *regs)
 {
+    if ((regs->cs & 3U) == 3U && user_mode_handle_exception(regs)) {
+        return;
+    }
+
     if (regs->int_no < EXCEPTION_COUNT && exception_handlers[regs->int_no] != NULL) {
         exception_handlers[regs->int_no](regs);
         return;

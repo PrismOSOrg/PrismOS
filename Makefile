@@ -12,11 +12,13 @@ DISK_MOUNT_POINT ?= $(BUILD)/disk-mnt
 QEMU=qemu-system-x86_64
 QEMU_DISK_IMAGE ?= $(BUILD)/disk.img
 QEMU_DISK_FORMAT ?= raw
+QEMU_AUDIO_BACKEND ?= none
+PIANO_DISK_IMAGE=$(BUILD)/piano-disk.img
 QEMU_FLAGS=-boot order=d -cdrom $(BUILD)/os.iso \
 	-drive file=$(QEMU_DISK_IMAGE),format=$(QEMU_DISK_FORMAT),if=ide,index=0,media=disk \
 	-monitor none
 
-.PHONY: all run run-serial run-serial-log run-vhdx run-secondary run-net run-net-serial check-disk-unmounted mount-disk unmount-disk mount-vhdx unmount-vhdx prismcc clean
+.PHONY: all run run-serial run-serial-log run-vhdx run-secondary run-net run-net-serial run-ac97 run-piano check-disk-unmounted mount-disk unmount-disk mount-vhdx unmount-vhdx prismcc clean
 
 all: os.iso
 
@@ -51,6 +53,8 @@ $(BUILD)/isr_stubs.o \
 $(BUILD)/idt.o \
 $(BUILD)/irq.o \
 $(BUILD)/interrupts.o \
+$(BUILD)/user_mode.o \
+$(BUILD)/user_mode_entry.o \
 $(BUILD)/ringbuf.o
 
 MEMORY_OBJS = \
@@ -84,6 +88,7 @@ APP_OBJS = \
 $(BUILD)/app_loader.o \
 $(BUILD)/app_runtime.o \
 $(BUILD)/bytecode_vm.o \
+$(BUILD)/user_driver_vm.o \
 $(BUILD)/prismcc_runtime.o \
 $(BUILD)/help_app.o \
 $(BUILD)/partition_manager_app.o \
@@ -137,6 +142,10 @@ $(BUILD)/e1000.o: src/net/drivers/e1000.c | $(BUILD)
 
 $(BUILD)/%.o: src/apps/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/user_driver_vm.o: src/apps/user_driver_vm.c | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -fno-inline -fno-jump-tables \
+		-fno-tree-switch-conversion -fno-builtin -c $< -o $@
 
 $(BUILD)/%.o: src/platform/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
@@ -233,6 +242,12 @@ run-net: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
 
 run-net-serial: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
 	$(QEMU) $(QEMU_FLAGS) -netdev user,id=net0 -device e1000,netdev=net0 -serial stdio
+
+run-ac97: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
+	$(QEMU) $(QEMU_FLAGS) -audiodev $(QEMU_AUDIO_BACKEND),id=audio0 -device AC97,audiodev=audio0
+
+run-piano: check-disk-unmounted os.iso
+	python3 tools/run-piano.py "$(QEMU)" "$(BUILD)/os.iso" "$(PIANO_DISK_IMAGE)" "$(QEMU_AUDIO_BACKEND)"
 
 # -------------------------
 # HOST IMAGE ACCESS

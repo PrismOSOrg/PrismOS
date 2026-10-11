@@ -100,6 +100,34 @@ IRQ_STUB  13   /* FPU              */
 IRQ_STUB  14   /* Primary ATA      */
 IRQ_STUB  15   /* Secondary ATA    */
 
+/* DPL-3 system call gate. The syscall number is supplied in EAX. */
+.global isr128
+isr128:
+    pushl $0
+    pushl $128
+    pusha
+    movw  %ds, %ax
+    pushl %eax
+
+    movw  $0x10, %ax
+    movw  %ax, %ds
+    movw  %ax, %es
+    movw  %ax, %fs
+    movw  %ax, %gs
+
+    pushl %esp
+    call  syscall_dispatcher
+    addl  $4, %esp
+
+    popl  %eax
+    movw  %ax, %ds
+    movw  %ax, %es
+    movw  %ax, %fs
+    movw  %ax, %gs
+    popa
+    addl  $8, %esp
+    iret
+
 /* =========================================================================
  * Common ISR stub — saves context, calls isr_handler(registers_t *)
  * ====================================================================== */

@@ -18,7 +18,7 @@ typedef struct {
     uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax; /* pusha order */
     uint32_t int_no;    /* 0–31 = CPU exception, 32–47 = IRQ 0–15          */
     uint32_t err_code;
-    uint32_t eip, cs, eflags; /* pushed by CPU (same-privilege path)       */
+    uint32_t eip, cs, eflags; /* CPU frame prefix; user ESP/SS follow on ring changes */
 } registers_t;
 
 /* Callback signature for all registered interrupt handlers. */
@@ -35,6 +35,10 @@ void irq_init(void);
  * functions — no changes anywhere else are needed. */
 void irq_register_handler(uint8_t irq, irq_handler_t handler);
 void irq_unregister_handler(uint8_t irq);
+int irq_driver_line_acquire(uint8_t irq);
+void irq_driver_line_release(uint8_t irq);
+void irq_driver_line_mask(uint8_t irq);
+void irq_driver_line_ack(uint8_t irq);
 
 /* Register / unregister a CPU exception handler for vectors 0-31. */
 void exception_register_handler(uint8_t vector, exception_handler_t handler);

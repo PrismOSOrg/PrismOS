@@ -59,18 +59,34 @@ void pic_send_eoi(uint8_t irq)
 
 void pic_mask_irq(uint8_t irq)
 {
-    uint16_t port = (irq < 8U) ? PIC1_DATA : PIC2_DATA;
-    uint8_t  bit  = (irq < 8U) ? irq : (uint8_t)(irq - 8U);
-    uint8_t  val  = (uint8_t)(inb(port) | (uint8_t)(1U << bit));
-    outb(port, val);
+    if (irq < 8U) {
+        uint8_t mask = (uint8_t)(inb(PIC1_DATA) | (uint8_t)(1U << irq));
+        outb(PIC1_DATA, mask);
+    } else if (irq < 16U) {
+        uint8_t slave_mask = (uint8_t)(inb(PIC2_DATA)
+            | (uint8_t)(1U << (irq - 8U)));
+        outb(PIC2_DATA, slave_mask);
+        if (slave_mask == 0xFFU) {
+            uint8_t master_mask = (uint8_t)(inb(PIC1_DATA) | (1U << 2));
+            outb(PIC1_DATA, master_mask);
+        }
+    }
 }
 
 void pic_unmask_irq(uint8_t irq)
 {
-    uint16_t port = (irq < 8U) ? PIC1_DATA : PIC2_DATA;
-    uint8_t  bit  = (irq < 8U) ? irq : (uint8_t)(irq - 8U);
-    uint8_t  val  = (uint8_t)(inb(port) & (uint8_t)~(1U << bit));
-    outb(port, val);
+    if (irq < 8U) {
+        uint8_t mask = (uint8_t)(inb(PIC1_DATA)
+            & (uint8_t)~(1U << irq));
+        outb(PIC1_DATA, mask);
+    } else if (irq < 16U) {
+        uint8_t slave_mask = (uint8_t)(inb(PIC2_DATA)
+            & (uint8_t)~(1U << (irq - 8U)));
+        uint8_t master_mask = (uint8_t)(inb(PIC1_DATA)
+            & (uint8_t)~(1U << 2));
+        outb(PIC2_DATA, slave_mask);
+        outb(PIC1_DATA, master_mask);
+    }
 }
 
 void pic_disable_all(void)

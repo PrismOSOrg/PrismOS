@@ -40,4 +40,8 @@ KeyEvent keyboard_read_event(void);
 /* Return the next queued event if available, otherwise KEY_EVENT_NONE. */
 KeyEvent keyboard_poll_event(void);
 
+/* Inspect the next queued event without consuming it. Serial input is not
+ * polled by this function. */
+KeyEvent keyboard_peek_event(void);
+
 #endif

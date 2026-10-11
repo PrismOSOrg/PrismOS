@@ -23,7 +23,9 @@ void pmm_init(const void *multiboot_info, const FramebufferInfo *framebuffer);
  * addresses represented as pointers for convenience in this pre-VM stage. */
 void *pmm_alloc_page(void);
 void *pmm_alloc_pages(size_t count);
+void *pmm_alloc_pages_below(size_t count, uint64_t max_address_exclusive);
 void pmm_free_page(void *addr);
+void pmm_free_pages(void *addr, size_t count);
 
 uint32_t pmm_total_memory_bytes(void);
 const pmm_stats_t *pmm_get_stats(void);

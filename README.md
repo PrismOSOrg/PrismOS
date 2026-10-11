@@ -26,6 +26,7 @@ make run-vhdx      # convert the test disk to VHDX and boot it in QEMU
 make run-secondary # attach a separate 2 GiB FAT32 IDE disk for drive-switch testing
 make run-net       # attach a QEMU e1000 NIC with user-mode networking
 make run-net-serial # same network setup with COM1 debug output
+make run-ac97      # attach the QEMU Intel AC'97 device (silent audio backend)
 ```
 
 Clipboard sharing:
@@ -235,15 +236,19 @@ This uses the same subset language as `prismcc` and compiles directly on the Pri
 
 ### PrismCC driver modules
 
-The in-OS compiler can also create cooperative PrismCC driver packages. A driver source defines `int driver_init()`, `void driver_poll()`, `void driver_shutdown()`, and `int main()`. Its `main()` calls initialization, polls until `driver_should_stop()` observes Esc, then shuts down.
+The in-OS compiler can also create PrismCC driver packages. A driver source defines `int driver_init()`, `void driver_poll()`, `void driver_shutdown()`, and `int main()`. Use `driver-start` to run the lifecycle callbacks as a resident service, `driver-list` to inspect active drivers, and `driver-stop <id>` to request shutdown. `driver-run` remains available for synchronous foreground execution through `main()`.
 
 ```text
 mkdir /DRIVERS
 cc /SERDRV.C /DRIVERS/SERIAL.PDR
-driver-run /DRIVERS/SERIAL.PDR
+driver-start /DRIVERS/SERIAL.PDR
+driver-list
+driver-stop 1
 ```
 
-Driver-only built-ins provide COM1 serial read/write, allowlisted COM1 port I/O (`0x3F8..0x3FF`), and checked 32-bit MMIO access to regions explicitly registered by trusted kernel code. The PrismOS FAT32 volume uses 8.3 names, so driver packages use the `.PDR` suffix. See [PRISMCC_COMPILER_FEATURES.md](PRISMCC_COMPILER_FEATURES.md) and [examples/serdrv.c](examples/serdrv.c) for the ABI and sample; copy the source to `/SERDRV.C` first. Drivers execute in the kernel's shared address space without process isolation; load only trusted code. The standalone `make prismcc` host compiler remains the small app-only compiler; compile driver packages with PrismOS's `cc` command.
+PrismCC drivers now execute in ring 3 under a separate user page directory. The BCVM interpreter and package image are user-mapped; kernel pages remain supervisor-only. Hardware, console, and per-driver state access goes through validated `int 0x80` services. User-mode CPU faults terminate the driver and the kernel cleans up its PCI and DMA resources. Direct port instructions and unsupported app-only bytecode services are denied. Resident drivers are round-robin time-sliced from the 100 Hz PIT tick; the timer requests a yield that the BCVM checks at most every 128 bytecode instructions, with a 5,000-instruction slice ceiling. Each driver has its own VM and hardware-resource context. A resident driver that polls `driver_should_stop()` will be shut down when Esc is pressed; `driver-stop` is also available. Any resident PrismCC driver may export `int driver_service(int operation, int argument0, int argument1)` for synchronous app calls through `driver_service_call(driverId, operation, argument0, argument1)`; `driver_service_find(serviceType)` can auto-detect a compatible running driver. Driver-only built-ins provide COM1 serial read/write, COM1 I/O, checked kernel-registered MMIO access, PCI discovery and exclusive claiming, bounds-checked I/O and mapped MMIO BAR access, contiguous DMA buffers, persistent integer state slots, and queued legacy PCI IRQ events. A driver subscribes with `driver_pci_subscribe_irq()`, reads events with `driver_irq_read()`, services the device, then calls `driver_irq_ack()` to unmask its PIC line. Interrupt handlers only enqueue events; no driver code runs in interrupt context. Scheduling is preemptive at BCVM instruction boundaries on this single CPU, not parallel; foreground `driver-run` remains synchronous. MSI/MSI-X and APIC interrupt routing are not supported. Existing `.PDR` packages must be recompiled with the in-OS `cc` command to use resident callbacks and the optional service ABI. The PrismOS FAT32 volume uses 8.3 names, so driver packages use the `.PDR` suffix. See [PRISMCC_COMPILER_FEATURES.md](PRISMCC_COMPILER_FEATURES.md), [examples/serdrv.c](examples/serdrv.c), and [examples/pci_probe_prismcc.c](examples/pci_probe_prismcc.c) for the ABI and samples; copy a source file to the PrismOS volume before compiling it. The standalone `make prismcc` host compiler remains the small app-only compiler; compile driver packages and service-using apps with PrismOS's `cc` command.
+
+The AC'97 example targets QEMU's Intel `8086:2415` device. Run `make run-piano` to build the ISO, create a fresh dedicated `build/piano-disk.img`, copy the driver and piano sources onto it, boot QEMU with AC'97, and automatically compile and launch the piano. This leaves the normal `build/disk.img` untouched; the dedicated piano image is recreated each time. Use `Z X C V B N M ,` and `S D G H J` as piano keys, and press Escape to exit. Audio is silent by default; set `QEMU_AUDIO_BACKEND=alsa` or `QEMU_AUDIO_BACKEND=pa` if that backend is available on the host and audible output is wanted. `make run-ac97` remains available for manual driver testing.
 
 ## Built-in Banking App
 

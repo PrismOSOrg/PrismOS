@@ -4,6 +4,9 @@
 #include "platform/gdt.h"
 #include "platform/io.h"
 #include "platform/pic.h"
+#include "platform/user_mode.h"
+#include "apps/user_driver_vm.h"
+#include "drivers/driver_api.h"
 #include "display/console.h"
 #include "debug/log.h"
 
@@ -16,9 +19,9 @@ static volatile uint32_t uptime_milliseconds;
 
 static void pit_irq_handler(registers_t* regs)
 {
-    (void)regs;
     uptime_milliseconds += 1000U / PIT_FREQUENCY;
     console_tick();
+    user_mode_request_preempt(regs);
 }
 
 uint32_t system_uptime_ms(void)
@@ -60,6 +63,16 @@ void interrupts_init(void)
     pit_init();
     irq_register_handler(0, pit_irq_handler);
     pic_unmask_irq(0);
+
+    if (user_mode_run_self_test() != 0) {
+        ERROR_LOG("ring-3 isolation self-test failed");
+    } else if (user_driver_vm_self_test() != 0) {
+        ERROR_LOG("ring-3 PrismCC VM self-test failed");
+    } else if (driver_runtime_irq_self_test() != 0) {
+        ERROR_LOG("PrismCC driver IRQ delivery self-test failed");
+    } else {
+        DEBUG_LOG("ring-3, PrismCC VM, and driver IRQ self-tests passed");
+    }
 
     DEBUG_LOG("interrupts: enabling interrupts");
     __asm__ volatile("sti");

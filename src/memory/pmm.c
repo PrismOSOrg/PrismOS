@@ -3,7 +3,6 @@
 #include <stdint.h>
 
 #include "debug/log.h"
-#include "platform/system.h"
 
 #define PAGE_SIZE 4096U
 #define MAX_PHYS_ADDR 0xFFFFFFFFU
@@ -236,8 +235,8 @@ void pmm_init(const void *multiboot_info, const FramebufferInfo *framebuffer)
     /* Page frame 0 is never allocatable. */
     bitmap_set(0U);
 
-    if (highest_phys > PHYS_ADDR_LIMIT_PLUS_ONE) {
-        highest_phys = PHYS_ADDR_LIMIT_PLUS_ONE;
+    if (highest_phys > MAX_PHYS_ADDR) {
+        highest_phys = MAX_PHYS_ADDR;
     }
 
     pmm_stats.total_memory_bytes = (uint32_t)highest_phys;
@@ -245,8 +244,6 @@ void pmm_init(const void *multiboot_info, const FramebufferInfo *framebuffer)
     pmm_stats.used_pages = pmm_stats.total_pages - pmm_stats.free_pages;
     pmm_stats.usable_memory_bytes = pmm_stats.free_pages * PAGE_SIZE;
     pmm_stats.reserved_memory_bytes = (pmm_stats.total_pages - pmm_stats.free_pages) * PAGE_SIZE;
-
-    PRISMOS_TOTAL_MEMORY_KB = pmm_stats.total_memory_bytes / 1024U;
 
     pmm_search_hint = 1U;
     pmm_initialized = 1;
@@ -278,7 +275,7 @@ static void mark_pages_used(uint32_t start_page, uint32_t count)
     pmm_stats.used_pages += count;
 }
 
-void *pmm_alloc_pages(size_t count)
+void *pmm_alloc_pages_below(size_t count, uint64_t max_address_exclusive)
 {
     if (!pmm_initialized || count == 0U) {
         return 0;
@@ -289,22 +286,37 @@ void *pmm_alloc_pages(size_t count)
         return 0;
     }
 
-    uint32_t max_page = (pmm_stats.total_pages > 0U) ? (pmm_stats.total_pages - 1U) : 0U;
+    uint32_t max_page;
     uint32_t start = pmm_search_hint;
 
+    if (max_address_exclusive > PHYS_ADDR_LIMIT_PLUS_ONE) {
+        max_address_exclusive = PHYS_ADDR_LIMIT_PLUS_ONE;
+    }
+    if (max_address_exclusive > ((uint64_t)pmm_stats.total_pages * PAGE_SIZE)) {
+        max_address_exclusive = (uint64_t)pmm_stats.total_pages * PAGE_SIZE;
+    }
+    if (max_address_exclusive < PAGE_SIZE) {
+        return 0;
+    }
+    max_page = (uint32_t)(max_address_exclusive / PAGE_SIZE) - 1U;
+
     if (start < 1U) {
+        start = 1U;
+    }
+    if (start > max_page) {
         start = 1U;
     }
 
     for (uint32_t pass = 0; pass < 2U; ++pass) {
         uint32_t begin = (pass == 0U) ? start : 1U;
-        uint32_t end = (pass == 0U) ? max_page : start;
+        uint32_t end = (pass == 0U) ? max_page : start - 1U;
 
-        if (end <= begin || page_count > (end - begin + 1U)) {
+        if (begin > end || page_count > (end - begin + 1U)) {
             continue;
         }
 
-        for (uint32_t page = begin; page + page_count - 1U <= end; ++page) {
+        uint32_t last_start = end - page_count + 1U;
+        for (uint32_t page = begin; page <= last_start; ++page) {
             if (!pages_are_free(page, page_count)) {
                 continue;
             }
@@ -318,6 +330,11 @@ void *pmm_alloc_pages(size_t count)
     return 0;
 }
 
+void *pmm_alloc_pages(size_t count)
+{
+    return pmm_alloc_pages_below(count, PHYS_ADDR_LIMIT_PLUS_ONE);
+}
+
 void *pmm_alloc_page(void)
 {
     return pmm_alloc_pages(1U);
@@ -325,7 +342,12 @@ void *pmm_alloc_page(void)
 
 void pmm_free_page(void *addr)
 {
-    if (!pmm_initialized || addr == 0) {
+    pmm_free_pages(addr, 1U);
+}
+
+void pmm_free_pages(void *addr, size_t count)
+{
+    if (!pmm_initialized || addr == 0 || count == 0U || count > 0xFFFFFFFFU) {
         return;
     }
 
@@ -334,20 +356,25 @@ void pmm_free_page(void *addr)
         return;
     }
 
-    uint32_t page = physical / PAGE_SIZE;
-    if (page == 0U || page >= pmm_stats.total_pages) {
+    uint32_t start_page = physical / PAGE_SIZE;
+    uint32_t page_count = (uint32_t)count;
+    if (start_page == 0U || start_page >= pmm_stats.total_pages
+        || page_count > pmm_stats.total_pages - start_page) {
         return;
     }
 
-    if (bitmap_test(page)) {
-        bitmap_clear(page);
-        pmm_stats.free_pages++;
-        if (pmm_stats.used_pages > 0U) {
-            pmm_stats.used_pages--;
-        }
+    for (uint32_t offset = 0U; offset < page_count; ++offset) {
+        uint32_t page = start_page + offset;
+        if (bitmap_test(page)) {
+            bitmap_clear(page);
+            pmm_stats.free_pages++;
+            if (pmm_stats.used_pages > 0U) {
+                pmm_stats.used_pages--;
+            }
 
-        if (page < pmm_search_hint) {
-            pmm_search_hint = page;
+            if (page < pmm_search_hint) {
+                pmm_search_hint = page;
+            }
         }
     }
 }

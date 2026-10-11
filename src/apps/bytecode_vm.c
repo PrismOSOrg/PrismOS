@@ -1,6 +1,8 @@
 #include "apps/bytecode_vm.h"
 
 #include "apps/app_format.h"
+#include "apps/app_manager.h"
+#include "apps/user_driver_vm.h"
 #include "debug/log.h"
 #include "display/console.h"
 #include "drivers/driver_api.h"
@@ -20,26 +22,60 @@
 #define BCVM_FILE_TEXT_MAX 2048U
 #define BCVM_FLOAT_SCALE 1000
 
-static char vm_input_buffer[BCVM_INPUT_MAX + 1U];
-static uint16_t vm_input_length = 0;
-static char vm_heap_string_data[BCVM_HEAP_STRING_BYTES];
-static uint16_t vm_heap_string_offset[BCVM_HEAP_STRING_MAX];
-static uint16_t vm_heap_string_length[BCVM_HEAP_STRING_MAX];
-static uint8_t vm_heap_string_used[BCVM_HEAP_STRING_MAX];
-static uint16_t vm_heap_next_offset = 0;
-static uint8_t vm_heap_next_slot = 0;
-static int32_t vm_heap_array_data[BCVM_HEAP_ARRAY_CELLS];
-static uint16_t vm_heap_array_offset[BCVM_HEAP_ARRAY_MAX];
-static uint16_t vm_heap_array_length[BCVM_HEAP_ARRAY_MAX];
-static uint8_t vm_heap_array_used[BCVM_HEAP_ARRAY_MAX];
-static uint16_t vm_heap_array_next_offset = 0;
-static uint8_t vm_heap_array_next_slot = 0;
-static int32_t vm_stack[BCVM_STACK_MAX];
-static int32_t vm_locals[BCVM_CALL_DEPTH_MAX + 1U][BCVM_LOCALS_MAX];
-static uint32_t vm_call_return_pc[BCVM_CALL_DEPTH_MAX];
-static char vm_file_path_buffer[BCVM_FILE_PATH_MAX];
-static char vm_file_text_buffer[BCVM_FILE_TEXT_MAX + 1U];
-static int vm_driver_mode;
+typedef struct {
+    char input_buffer[BCVM_INPUT_MAX + 1U];
+    uint16_t input_length;
+    char heap_string_data[BCVM_HEAP_STRING_BYTES];
+    uint16_t heap_string_offset[BCVM_HEAP_STRING_MAX];
+    uint16_t heap_string_length[BCVM_HEAP_STRING_MAX];
+    uint8_t heap_string_used[BCVM_HEAP_STRING_MAX];
+    uint16_t heap_next_offset;
+    uint8_t heap_next_slot;
+    int32_t heap_array_data[BCVM_HEAP_ARRAY_CELLS];
+    uint16_t heap_array_offset[BCVM_HEAP_ARRAY_MAX];
+    uint16_t heap_array_length[BCVM_HEAP_ARRAY_MAX];
+    uint8_t heap_array_used[BCVM_HEAP_ARRAY_MAX];
+    uint16_t heap_array_next_offset;
+    uint8_t heap_array_next_slot;
+    int32_t stack[BCVM_STACK_MAX];
+    int32_t locals[BCVM_CALL_DEPTH_MAX + 1U][BCVM_LOCALS_MAX];
+    uint32_t call_return_pc[BCVM_CALL_DEPTH_MAX];
+    char file_path_buffer[BCVM_FILE_PATH_MAX];
+    char file_text_buffer[BCVM_FILE_TEXT_MAX + 1U];
+    uint32_t pc;
+    uint32_t sp;
+    uint32_t call_depth;
+    uint32_t steps;
+    uint32_t entry_offset;
+    int32_t return_value;
+    uint8_t stop_requested;
+    const uint8_t* image;
+    uint32_t image_size;
+    uint8_t active_call;
+} BytecodeVmContext;
+
+static BytecodeVmContext app_vm_context;
+static BytecodeVmContext* active_vm_context;
+
+#define vm_input_buffer (active_vm_context->input_buffer)
+#define vm_input_length (active_vm_context->input_length)
+#define vm_heap_string_data (active_vm_context->heap_string_data)
+#define vm_heap_string_offset (active_vm_context->heap_string_offset)
+#define vm_heap_string_length (active_vm_context->heap_string_length)
+#define vm_heap_string_used (active_vm_context->heap_string_used)
+#define vm_heap_next_offset (active_vm_context->heap_next_offset)
+#define vm_heap_next_slot (active_vm_context->heap_next_slot)
+#define vm_heap_array_data (active_vm_context->heap_array_data)
+#define vm_heap_array_offset (active_vm_context->heap_array_offset)
+#define vm_heap_array_length (active_vm_context->heap_array_length)
+#define vm_heap_array_used (active_vm_context->heap_array_used)
+#define vm_heap_array_next_offset (active_vm_context->heap_array_next_offset)
+#define vm_heap_array_next_slot (active_vm_context->heap_array_next_slot)
+#define vm_stack (active_vm_context->stack)
+#define vm_locals (active_vm_context->locals)
+#define vm_call_return_pc (active_vm_context->call_return_pc)
+#define vm_file_path_buffer (active_vm_context->file_path_buffer)
+#define vm_file_text_buffer (active_vm_context->file_text_buffer)
 
 #define VM_STRING_DESC_HEAP_MASK 0x80000000U
 
@@ -394,7 +430,9 @@ static int vm_read_header(const uint8_t* image, uint32_t image_size, bcvm_image_
     out_header->data_size = read_u32le(&image[12]);
     out_header->entry_offset = read_u32le(&image[16]);
 
-    if (out_header->magic != BCVM_MAGIC || out_header->version != BCVM_VERSION) {
+    if (out_header->magic != BCVM_MAGIC
+        || out_header->version < BCVM_MIN_COMPATIBLE_VERSION
+        || out_header->version > BCVM_VERSION) {
         return -1;
     }
 
@@ -413,61 +451,105 @@ static int vm_read_header(const uint8_t* image, uint32_t image_size, bcvm_image_
     return 0;
 }
 
-int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args) {
+static int bytecode_vm_run_context(const uint8_t* image, uint32_t image_size,
+    const char* args, BytecodeVmContext* context, uint32_t entry_offset,
+    int resume) {
     bcvm_image_header_t header;
     const uint8_t* code;
     const uint8_t* data;
-    int32_t* stack = vm_stack;
-    int32_t (*locals)[BCVM_LOCALS_MAX] = vm_locals;
-    uint32_t* call_return_pc = vm_call_return_pc;
-    uint32_t sp = 0;
-    uint32_t call_depth = 0;
-    uint32_t pc = 0;
-    uint32_t steps = 0;
+    int32_t* stack;
+    int32_t (*locals)[BCVM_LOCALS_MAX];
+    uint32_t* call_return_pc;
+    uint32_t sp;
+    uint32_t call_depth;
+    uint32_t pc;
+    uint32_t steps;
     int fullscreen_enabled = 0;
 
     (void)args;
-    vm_input_length = 0;
-    vm_input_buffer[0] = '\0';
-    vm_heap_next_offset = 0;
-    vm_heap_next_slot = 0;
-    vm_heap_array_next_offset = 0;
-    vm_heap_array_next_slot = 0;
-    for (uint32_t i = 0; i < BCVM_HEAP_STRING_MAX; i++) {
-        vm_heap_string_used[i] = 0U;
-    }
-    for (uint32_t i = 0; i < BCVM_HEAP_ARRAY_MAX; i++) {
-        vm_heap_array_used[i] = 0U;
-    }
+    active_vm_context = context;
+    stack = vm_stack;
+    locals = vm_locals;
+    call_return_pc = vm_call_return_pc;
 
     if (vm_read_header(image, image_size, &header) != 0) {
         ERROR_LOG("BCVM invalid image header");
         return -1;
     }
 
+    if (entry_offset == 0xFFFFFFFFU) {
+        entry_offset = header.entry_offset;
+    }
+    if (entry_offset >= header.code_size) {
+        return -1;
+    }
+
+    if (resume) {
+        if (context->active_call == 0U
+            || context->image != image
+            || context->image_size != image_size
+            || context->entry_offset != entry_offset) {
+            return -1;
+        }
+        sp = context->sp;
+        call_depth = context->call_depth;
+        pc = context->pc;
+        steps = context->steps;
+    } else {
+        vm_input_length = 0U;
+        vm_input_buffer[0] = '\0';
+        vm_heap_next_offset = 0U;
+        vm_heap_next_slot = 0U;
+        vm_heap_array_next_offset = 0U;
+        vm_heap_array_next_slot = 0U;
+        for (uint32_t i = 0U; i < BCVM_HEAP_STRING_MAX; ++i) {
+            vm_heap_string_used[i] = 0U;
+        }
+        for (uint32_t i = 0U; i < BCVM_HEAP_ARRAY_MAX; ++i) {
+            vm_heap_array_used[i] = 0U;
+        }
+        sp = 0U;
+        call_depth = 0U;
+        pc = entry_offset;
+        steps = 0U;
+        context->return_value = 0;
+        context->stop_requested = 0U;
+
+        {
+            volatile int32_t* init_stack = &stack[0];
+            volatile int32_t* init_locals = &locals[0][0];
+            volatile uint32_t* init_returns = &call_return_pc[0];
+
+            for (uint32_t i = 0U; i < BCVM_STACK_MAX; ++i) {
+                init_stack[i] = 0;
+            }
+            for (uint32_t i = 0U;
+                i < (BCVM_CALL_DEPTH_MAX + 1U) * BCVM_LOCALS_MAX; ++i) {
+                init_locals[i] = 0;
+            }
+            for (uint32_t i = 0U; i < BCVM_CALL_DEPTH_MAX; ++i) {
+                init_returns[i] = 0U;
+            }
+        }
+        context->image = image;
+        context->image_size = image_size;
+        context->entry_offset = entry_offset;
+        context->active_call = 1U;
+    }
+
     {
-        volatile int32_t* init_stack = &stack[0];
-        volatile int32_t* init_locals = &locals[0][0];
-        volatile uint32_t* init_returns = &call_return_pc[0];
-
-        for (uint32_t i = 0; i < BCVM_STACK_MAX; i++) {
-            init_stack[i] = 0;
-        }
-
-        for (uint32_t i = 0; i < (BCVM_CALL_DEPTH_MAX + 1U) * BCVM_LOCALS_MAX; i++) {
-            init_locals[i] = 0;
-        }
-
-        for (uint32_t i = 0; i < BCVM_CALL_DEPTH_MAX; i++) {
-            init_returns[i] = 0U;
+        if (sp > BCVM_STACK_MAX || call_depth > BCVM_CALL_DEPTH_MAX) {
+            context->active_call = 0U;
+            return -1;
         }
     }
 
     code = image + BCVM_IMAGE_HEADER_SIZE;
     data = code + header.code_size;
-    pc = header.entry_offset;
 
-    DEBUG_LOG("BCVM started");
+    if (!resume) {
+        DEBUG_LOG("BCVM started");
+    }
 
     while (pc < header.code_size) {
         uint8_t opcode = code[pc++];
@@ -560,6 +642,33 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 }
                 break;
             }
+            case BCVM_OP_BIT_AND:
+            case BCVM_OP_BIT_OR:
+            case BCVM_OP_BIT_XOR:
+            case BCVM_OP_SHIFT_LEFT:
+            case BCVM_OP_SHIFT_RIGHT: {
+                uint32_t rhs;
+                uint32_t lhs;
+                if (sp < 2U) {
+                    ERROR_LOG("BCVM bitwise operation underflow");
+                    return -1;
+                }
+
+                rhs = (uint32_t)stack[--sp];
+                lhs = (uint32_t)stack[--sp];
+                if (opcode == BCVM_OP_BIT_AND) {
+                    stack[sp++] = (int32_t)(lhs & rhs);
+                } else if (opcode == BCVM_OP_BIT_OR) {
+                    stack[sp++] = (int32_t)(lhs | rhs);
+                } else if (opcode == BCVM_OP_BIT_XOR) {
+                    stack[sp++] = (int32_t)(lhs ^ rhs);
+                } else if (opcode == BCVM_OP_SHIFT_LEFT) {
+                    stack[sp++] = (int32_t)(lhs << (rhs & 31U));
+                } else {
+                    stack[sp++] = (int32_t)(lhs >> (rhs & 31U));
+                }
+                break;
+            }
             case BCVM_OP_FMUL:
             case BCVM_OP_FDIV: {
                 int32_t rhs;
@@ -599,6 +708,12 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 stack[sp - 1U] = -stack[sp - 1U];
                 break;
             }
+            case BCVM_OP_BIT_NOT:
+                if (sp == 0U) {
+                    return -1;
+                }
+                stack[sp - 1U] = (int32_t)~(uint32_t)stack[sp - 1U];
+                break;
             case BCVM_OP_EQ:
             case BCVM_OP_NE:
             case BCVM_OP_LT:
@@ -1145,6 +1260,50 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 }
                 stack[sp++] = vm_poll_quit_request() ? 1 : 0;
                 break;
+            case BCVM_OP_APP_READ_KEY: {
+                KeyEvent event;
+                if (sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+                do {
+                    event = keyboard_read_event();
+                } while (event.type == KEY_EVENT_NONE);
+                if (event.type == KEY_EVENT_CHARACTER) {
+                    stack[sp++] = (unsigned char)event.character;
+                } else if (event.type == KEY_EVENT_ENTER) {
+                    stack[sp++] = '\n';
+                } else if (event.type == KEY_EVENT_BACKSPACE) {
+                    stack[sp++] = '\b';
+                } else {
+                    stack[sp++] = -1;
+                }
+                break;
+            }
+            case BCVM_OP_DRIVER_SERVICE_CALL: {
+                int32_t argument1;
+                int32_t argument0;
+                int32_t operation;
+                int32_t driver_id;
+                if (sp < 4U) {
+                    return -1;
+                }
+                argument1 = stack[--sp];
+                argument0 = stack[--sp];
+                operation = stack[--sp];
+                driver_id = stack[--sp];
+                stack[sp++] = app_manager_driver_service_call(
+                    (uint32_t)driver_id, operation, argument0, argument1);
+                break;
+            }
+            case BCVM_OP_DRIVER_SERVICE_FIND: {
+                int32_t service_type;
+                if (sp == 0U) {
+                    return -1;
+                }
+                service_type = stack[--sp];
+                stack[sp++] = app_manager_driver_service_find(service_type);
+                break;
+            }
             case BCVM_OP_APP_EXIT:
                 console_set_cursor_visible(1);
                 DEBUG_LOG("BCVM app exit requested");
@@ -1173,72 +1332,39 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 console_draw_pixel((int)x, (int)y, (VGA_Color)color);
                 break;
             }
-            case BCVM_OP_DRIVER_SERIAL_WRITE: {
-                const char* bytes;
-                uint16_t length;
-                int32_t status;
-
-                if (!vm_driver_mode || sp == 0U || sp >= BCVM_STACK_MAX) {
-                    return -1;
-                }
-
-                if (vm_resolve_string_descriptor((uint32_t)stack[--sp], data, &header, &bytes, &length) != 0) {
-                    return -1;
-                }
-                status = driver_api_serial_write(bytes, length);
-                stack[sp++] = status;
-                break;
-            }
+            case BCVM_OP_DRIVER_SERIAL_WRITE:
             case BCVM_OP_DRIVER_SERIAL_READ:
-                if (!vm_driver_mode || sp >= BCVM_STACK_MAX) {
-                    return -1;
-                }
-                stack[sp++] = driver_api_serial_read();
-                break;
             case BCVM_OP_DRIVER_PORT_READ8:
-                if (!vm_driver_mode || sp == 0U) {
-                    return -1;
-                }
-                stack[sp - 1U] = driver_api_port_read8((uint32_t)stack[sp - 1U]);
-                break;
-            case BCVM_OP_DRIVER_PORT_WRITE8: {
-                uint32_t port;
-                uint32_t value;
-
-                if (!vm_driver_mode || sp < 2U) {
-                    return -1;
-                }
-                value = (uint32_t)stack[--sp];
-                port = (uint32_t)stack[--sp];
-                stack[sp++] = driver_api_port_write8(port, value);
-                break;
-            }
+            case BCVM_OP_DRIVER_PORT_WRITE8:
             case BCVM_OP_DRIVER_MMIO_READ32:
-                if (!vm_driver_mode || sp == 0U) {
-                    return -1;
-                }
-                stack[sp - 1U] = driver_api_mmio_read32((uint32_t)stack[sp - 1U]);
-                break;
-            case BCVM_OP_DRIVER_MMIO_WRITE32: {
-                uint32_t address;
-                uint32_t value;
-
-                if (!vm_driver_mode || sp < 2U) {
-                    return -1;
-                }
-                value = (uint32_t)stack[--sp];
-                address = (uint32_t)stack[--sp];
-                stack[sp++] = driver_api_mmio_write32(address, value);
-                break;
-            }
+            case BCVM_OP_DRIVER_MMIO_WRITE32:
             case BCVM_OP_DRIVER_SHOULD_STOP:
-                if (!vm_driver_mode || sp >= BCVM_STACK_MAX) {
-                    return -1;
-                }
-                /* Driver loops must explicitly poll for shutdown; each poll renews the VM budget. */
-                steps = 0U;
-                stack[sp++] = vm_poll_quit_request() ? 1 : 0;
-                break;
+            case BCVM_OP_DRIVER_PCI_FIND:
+            case BCVM_OP_DRIVER_PCI_READ_CONFIG32:
+            case BCVM_OP_DRIVER_PCI_READ_BAR32:
+            case BCVM_OP_DRIVER_PCI_CLAIM:
+            case BCVM_OP_DRIVER_PCI_ENABLE:
+            case BCVM_OP_DRIVER_PCI_CLAIM_IO_BAR:
+            case BCVM_OP_DRIVER_PCI_IO_READ:
+            case BCVM_OP_DRIVER_PCI_IO_WRITE:
+            case BCVM_OP_DRIVER_DMA_ALLOC:
+            case BCVM_OP_DRIVER_DMA_PHYSICAL:
+            case BCVM_OP_DRIVER_DMA_READ:
+            case BCVM_OP_DRIVER_DMA_WRITE:
+            case BCVM_OP_DRIVER_DMA_FREE:
+            case BCVM_OP_DRIVER_PCI_DISABLE:
+            case BCVM_OP_DRIVER_PCI_CLAIM_MMIO_BAR:
+            case BCVM_OP_DRIVER_PCI_MMIO_READ32:
+            case BCVM_OP_DRIVER_PCI_MMIO_WRITE32:
+            case BCVM_OP_DRIVER_DMA_ALLOC_BELOW:
+            case BCVM_OP_DRIVER_STATE_READ:
+            case BCVM_OP_DRIVER_STATE_WRITE:
+            case BCVM_OP_DRIVER_PCI_SUBSCRIBE_IRQ:
+            case BCVM_OP_DRIVER_IRQ_READ:
+            case BCVM_OP_DRIVER_IRQ_DROPPED:
+            case BCVM_OP_DRIVER_IRQ_ACK:
+                ERROR_LOG("BCVM driver opcode rejected outside ring-3 VM");
+                return -1;
             case BCVM_OP_POP:
                 if (sp == 0U) {
                     return -1;
@@ -1252,6 +1378,7 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 }
 
                 if (call_depth == 0U) {
+                    context->return_value = stack[sp - 1U];
                     console_set_cursor_visible(1);
                     DEBUG_LOG("BCVM finished");
                     return 0;
@@ -1268,6 +1395,7 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 }
                 break;
             case BCVM_OP_HALT:
+                context->return_value = 0;
                 console_set_cursor_visible(1);
                 DEBUG_LOG("BCVM finished");
                 return 0;
@@ -1281,17 +1409,79 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
     return -1;
 }
 
+int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
+{
+    return bytecode_vm_run_context(image, image_size, args,
+        &app_vm_context, 0xFFFFFFFFU, 0);
+}
+
+int bytecode_vm_driver_slice(const uint8_t* image, uint32_t image_size,
+    uint32_t entry_offset, uint32_t runtime_handle, int resume)
+{
+    return user_driver_vm_slice(image, image_size, entry_offset,
+        runtime_handle, resume);
+}
+
+int bytecode_vm_driver_service(const uint8_t* image, uint32_t image_size,
+    uint32_t entry_offset, uint32_t runtime_handle, int32_t operation,
+    int32_t argument0, int32_t argument1, int resume)
+{
+    return user_driver_vm_service(image, image_size, entry_offset,
+        runtime_handle, operation, argument0, argument1, resume);
+}
+
+int bytecode_vm_driver_service_find(int32_t service_type)
+{
+    return app_manager_driver_service_find(service_type);
+}
+
+void bytecode_vm_driver_reset(uint32_t runtime_handle)
+{
+    user_driver_vm_reset(runtime_handle);
+}
+
+void bytecode_vm_driver_destroy(uint32_t runtime_handle)
+{
+    user_driver_vm_destroy(runtime_handle);
+}
+
+int32_t bytecode_vm_driver_result(uint32_t runtime_handle)
+{
+    return user_driver_vm_result(runtime_handle);
+}
+
+int bytecode_vm_driver_stop_requested(uint32_t runtime_handle)
+{
+    return user_driver_vm_stop_requested(runtime_handle);
+}
+
+int bytecode_vm_driver_isolation_available(void)
+{
+    return user_driver_vm_isolation_available();
+}
+
 int bytecode_vm_run_driver(const uint8_t* image, uint32_t image_size, const char* args) {
     int result;
+    int resume = 0;
+    int runtime_handle;
+    (void)args;
 
-    if (driver_runtime_begin() != 0) {
+    if (!bytecode_vm_driver_isolation_available()) {
+        ERROR_LOG("PrismCC driver execution rejected: ring-3 VM self-test unavailable");
+        return -1;
+    }
+    runtime_handle = driver_runtime_create();
+    if (runtime_handle < 0) {
         ERROR_LOG("PrismCC driver runtime could not claim hardware services");
         return -1;
     }
 
-    vm_driver_mode = 1;
-    result = bytecode_vm_run(image, image_size, args);
-    vm_driver_mode = 0;
-    driver_runtime_end();
+    do {
+        result = bytecode_vm_driver_slice(image, image_size,
+            0xFFFFFFFFU, (uint32_t)runtime_handle, resume);
+        resume = result == BCVM_DRIVER_SLICE_YIELDED;
+    } while (resume);
+    bytecode_vm_driver_destroy((uint32_t)runtime_handle);
+    driver_runtime_destroy((uint32_t)runtime_handle);
     return result;
 }

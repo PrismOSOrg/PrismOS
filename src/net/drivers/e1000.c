@@ -306,5 +306,11 @@ int e1000_driver_init(void) {
         || device.vendor_id != E1000_VENDOR_ID) {
         return -1;
     }
+
+    if (pci_claim_device(&device, PCI_DEVICE_OWNER_KERNEL) != 0) {
+        ERROR_LOG("e1000: PCI device is already claimed");
+        return -1;
+    }
+
     return e1000_initialize_device(&device);
 }

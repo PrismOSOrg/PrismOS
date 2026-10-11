@@ -1,6 +1,7 @@
 #include "shell.h"
 
 #include "commands/command.h"
+#include "apps/app_manager.h"
 #include "debug/log.h"
 #include "display/console.h"
 #include "filesystem/vfs.h"
@@ -355,6 +356,10 @@ static void shell_show_prompt(void) {
 
 static void shell_handle_event(KeyEvent event) {
     if (event.type == KEY_EVENT_CHARACTER) {
+        if (event.character == 27) {
+            return;
+        }
+
         if (event.character == '\t') {
             shell_insert_char(' ');
             shell_insert_char(' ');
@@ -430,6 +435,7 @@ void shell_run(void) {
     while (1) {
         KeyEvent event;
         network_poll();
+        app_manager_driver_tick();
         event = keyboard_poll_event();
         if (event.type == KEY_EVENT_NONE) {
             __asm__ volatile ("hlt");

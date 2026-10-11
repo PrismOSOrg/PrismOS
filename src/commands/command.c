@@ -4,7 +4,7 @@
 #include "debug/log.h"
 #include "display/console.h"
 #include "platform/io.h"
-#include "platform/system.h"
+#include "memory/pmm.h"
 #include "filesystem/blockdev.h"
 #include "filesystem/vfs.h"
 #include "filesystem/partition_manager.h"
@@ -87,6 +87,9 @@ static void command_ide(const char* arguments);
 static void command_app_run(const char* arguments);
 static void command_cc(const char* arguments);
 static void command_driver_run(const char* arguments);
+static void command_driver_start(const char* arguments);
+static void command_driver_stop(const char* arguments);
+static void command_driver_list(const char* arguments);
 static int parse_drive_index(const char* text, uint32_t* out_index);
 static void command_mv(const char* arguments);
 static void command_partitions(const char* arguments);
@@ -170,7 +173,10 @@ static const Command commands[] = {
     {{"comport", "Sends a line of text through the COM1 serial port, useful for external serial terminals and diagnostics.", "comport <text>", "text: message to transmit; spaces are included.", "comport test message"}, command_comport},
     {{"delete", "Removes a file or an empty directory. Non-empty directories cannot be removed.", "delete <path>", "path: existing file or empty directory path.", "delete /OLD.TXT"}, command_delete},
     {{"drive", "Lists physical ATA drives and capacities, or switches to a drive and mounts its first supported FAT32 volume. Partition slots are selected with partitions mount.", "drive [index]", "index: optional zero-based physical drive number shown by drive; it is not an MBR partition slot. Switching resets the current directory to root.", "drive 1"}, command_drive},
-    {{"driver-run", "Loads and starts a PrismCC .pdr module through the cooperative driver runtime. Press Esc to request shutdown.", "driver-run <path.pdr>", "path.pdr: compiled PrismCC driver package with driver_init, driver_poll, driver_shutdown, and main entry points.", "driver-run /DRIVERS/SERIAL.PDR"}, command_driver_run},
+    {{"driver-list", "Lists resident PrismCC drivers and their lifecycle state.", "driver-list", "None.", "driver-list"}, command_driver_list},
+    {{"driver-run", "Loads and runs a PrismCC driver synchronously in the foreground. Use driver-start for a resident driver.", "driver-run <path.pdr>", "path.pdr: compiled PrismCC driver package.", "driver-run /DRIVERS/SERIAL.PDR"}, command_driver_run},
+    {{"driver-start", "Starts a PrismCC driver as a resident service while keeping the shell available.", "driver-start <path.pdr>", "path.pdr: compiled PrismCC driver package with lifecycle entry metadata.", "driver-start /DRIVERS/SERIAL.PDR"}, command_driver_start},
+    {{"driver-stop", "Requests a resident driver to run driver_shutdown() and release its resources.", "driver-stop <id>", "id: driver number printed by driver-start or driver-list.", "driver-stop 1"}, command_driver_stop},
     {{"echo", "Prints the command's remaining text to the console. Useful for quick shell messages.", "echo <text>", "text: message to display; spaces are preserved.", "echo Hello PrismOS"}, command_echo},
     {{"edit", "Opens a text file in the built-in full-screen editor. Save or exit using the editor's on-screen controls.", "edit <path>", "path: file path to open or create.", "edit /NOTES.TXT"}, command_edit},
     {{"help", "Opens the interactive command browser, or prints syntax, parameters, and an example for one named command.", "help [command]", "command: optional command name to look up.", "help drive"}, command_help},
@@ -249,7 +255,7 @@ static void command_echo(const char* arguments) {
 static void command_about(const char* arguments) {
     (void)arguments;
     DEBUG_LOG("about command executed");
-    const uint32_t total_memory_kb = PRISMOS_TOTAL_MEMORY_KB;
+    const uint32_t total_memory_kb = pmm_total_memory_bytes() / 1024U;
 
     // Keep the version with the general system summary so users only need one command.
     console_writeln("PrismOS version 0.1 beta - early development stage");
@@ -1474,6 +1480,52 @@ static void command_driver_run(const char* arguments) {
     if (app_manager_run_driver_path(absolute) != 0) {
         console_writeln("driver load or execution failed");
     }
+}
+
+static void command_driver_start(const char* arguments) {
+    char token[COMMAND_TOKEN_CAPACITY];
+    char absolute[COMMAND_PATH_CAPACITY];
+    const char* remainder = 0;
+    uint32_t id;
+
+    if (parse_token(arguments, token, sizeof(token), &remainder) != 0 || *remainder != '\0') {
+        console_writeln("Usage: driver-start <path.pdr>");
+        return;
+    }
+    if (resolve_to_absolute_path(token, absolute, sizeof(absolute)) != 0) {
+        console_writeln("Invalid driver path");
+        return;
+    }
+    if (app_manager_start_driver_path(absolute, &id) != 0) {
+        console_writeln("Driver could not be started (invalid package or no free slots)");
+        return;
+    }
+
+    console_write("Driver started as ");
+    console_write_uint(id);
+    console_writeln(" (initializing)");
+}
+
+static void command_driver_stop(const char* arguments) {
+    char token[COMMAND_TOKEN_CAPACITY];
+    const char* remainder = 0;
+    uint32_t id;
+
+    if (parse_token(arguments, token, sizeof(token), &remainder) != 0
+        || *remainder != '\0' || parse_drive_index(token, &id) != 0
+        || app_manager_stop_driver(id) != 0) {
+        console_writeln("Usage: driver-stop <id>");
+        return;
+    }
+    console_writeln("Driver shutdown requested");
+}
+
+static void command_driver_list(const char* arguments) {
+    if (*skip_spaces(arguments) != '\0') {
+        console_writeln("Usage: driver-list");
+        return;
+    }
+    app_manager_list_drivers();
 }
 
 static void command_cc(const char* arguments) {

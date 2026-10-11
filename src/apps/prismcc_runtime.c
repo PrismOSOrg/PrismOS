@@ -49,7 +49,10 @@ typedef enum {
     TOK_FILE_EXISTS,
     TOK_SET_FULLSCREEN,
     TOK_APP_SHOULD_QUIT,
+    TOK_APP_READ_KEY,
     TOK_APP_EXIT,
+    TOK_DRIVER_SERVICE_CALL,
+    TOK_DRIVER_SERVICE_FIND,
     TOK_DRAW_PIXEL,
     TOK_DRIVER_SERIAL_WRITE,
     TOK_DRIVER_SERIAL_READ,
@@ -58,6 +61,30 @@ typedef enum {
     TOK_DRIVER_MMIO_READ32,
     TOK_DRIVER_MMIO_WRITE32,
     TOK_DRIVER_SHOULD_STOP,
+    TOK_DRIVER_PCI_FIND,
+    TOK_DRIVER_PCI_READ_CONFIG32,
+    TOK_DRIVER_PCI_READ_BAR32,
+    TOK_DRIVER_PCI_CLAIM,
+    TOK_DRIVER_PCI_ENABLE,
+    TOK_DRIVER_PCI_DISABLE,
+    TOK_DRIVER_PCI_CLAIM_IO_BAR,
+    TOK_DRIVER_PCI_CLAIM_MMIO_BAR,
+    TOK_DRIVER_PCI_IO_READ,
+    TOK_DRIVER_PCI_IO_WRITE,
+    TOK_DRIVER_PCI_MMIO_READ32,
+    TOK_DRIVER_PCI_MMIO_WRITE32,
+    TOK_DRIVER_DMA_ALLOC,
+    TOK_DRIVER_DMA_ALLOC_BELOW,
+    TOK_DRIVER_DMA_PHYSICAL,
+    TOK_DRIVER_DMA_READ,
+    TOK_DRIVER_DMA_WRITE,
+    TOK_DRIVER_DMA_FREE,
+    TOK_DRIVER_STATE_READ,
+    TOK_DRIVER_STATE_WRITE,
+    TOK_DRIVER_PCI_SUBSCRIBE_IRQ,
+    TOK_DRIVER_IRQ_READ,
+    TOK_DRIVER_IRQ_DROPPED,
+    TOK_DRIVER_IRQ_ACK,
     TOK_IF,
     TOK_ELSE,
     TOK_WHILE,
@@ -90,7 +117,13 @@ typedef enum {
     TOK_LT,
     TOK_LTE,
     TOK_GT,
-    TOK_GTE
+    TOK_GTE,
+    TOK_BIT_AND,
+    TOK_BIT_OR,
+    TOK_BIT_XOR,
+    TOK_BIT_NOT,
+    TOK_SHIFT_LEFT,
+    TOK_SHIFT_RIGHT
 } TokenType;
 
 typedef struct {
@@ -176,7 +209,9 @@ typedef struct {
 static char source_buffer[PRISMCC_MAX_SOURCE_SIZE + 1U];
 static char include_file_buffers[PRISMCC_MAX_INCLUDE_DEPTH][PRISMCC_MAX_SOURCE_SIZE + 1U];
 static char include_stack[PRISMCC_MAX_INCLUDE_DEPTH][PRISMCC_MAX_PATH];
-static uint8_t output_buffer[PRISM_APP_HEADER_SIZE + BCVM_IMAGE_HEADER_SIZE + PRISMCC_MAX_CODE_SIZE + PRISMCC_MAX_DATA_SIZE];
+static uint8_t output_buffer[PRISM_APP_HEADER_SIZE + BCVM_IMAGE_HEADER_SIZE
+    + PRISMCC_MAX_CODE_SIZE + PRISMCC_MAX_DATA_SIZE
+    + PRISM_DRIVER_ENTRY_TABLE_SIZE];
 static PrismCompiler compiler;
 
 static void set_error(char* out, uint32_t capacity, const char* message) {
@@ -249,6 +284,19 @@ static int is_alpha(char c) {
 
 static int is_digit(char c) {
     return c >= '0' && c <= '9';
+}
+
+static int hex_digit_value(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
 }
 
 static int string_equals(const char* left, const char* right) {
@@ -663,8 +711,20 @@ static TokenType keyword_type(const char* text) {
         return TOK_APP_SHOULD_QUIT;
     }
 
+    if (string_equals(text, "app_read_key")) {
+        return TOK_APP_READ_KEY;
+    }
+
     if (string_equals(text, "app_exit")) {
         return TOK_APP_EXIT;
+    }
+
+    if (string_equals(text, "driver_service_call")) {
+        return TOK_DRIVER_SERVICE_CALL;
+    }
+
+    if (string_equals(text, "driver_service_find")) {
+        return TOK_DRIVER_SERVICE_FIND;
     }
 
     if (string_equals(text, "draw_pixel")) {
@@ -695,8 +755,104 @@ static TokenType keyword_type(const char* text) {
         return TOK_DRIVER_MMIO_WRITE32;
     }
 
+    if (string_equals(text, "driver_pci_find")) {
+        return TOK_DRIVER_PCI_FIND;
+    }
+
+    if (string_equals(text, "driver_pci_read_config32")) {
+        return TOK_DRIVER_PCI_READ_CONFIG32;
+    }
+
+    if (string_equals(text, "driver_pci_read_bar32")) {
+        return TOK_DRIVER_PCI_READ_BAR32;
+    }
+
+    if (string_equals(text, "driver_pci_claim")) {
+        return TOK_DRIVER_PCI_CLAIM;
+    }
+
+    if (string_equals(text, "driver_pci_enable")) {
+        return TOK_DRIVER_PCI_ENABLE;
+    }
+
+    if (string_equals(text, "driver_pci_disable")) {
+        return TOK_DRIVER_PCI_DISABLE;
+    }
+
+    if (string_equals(text, "driver_pci_claim_io_bar")) {
+        return TOK_DRIVER_PCI_CLAIM_IO_BAR;
+    }
+
+    if (string_equals(text, "driver_pci_claim_mmio_bar")) {
+        return TOK_DRIVER_PCI_CLAIM_MMIO_BAR;
+    }
+
+    if (string_equals(text, "driver_pci_io_read")) {
+        return TOK_DRIVER_PCI_IO_READ;
+    }
+
+    if (string_equals(text, "driver_pci_io_write")) {
+        return TOK_DRIVER_PCI_IO_WRITE;
+    }
+
+    if (string_equals(text, "driver_pci_mmio_read32")) {
+        return TOK_DRIVER_PCI_MMIO_READ32;
+    }
+
+    if (string_equals(text, "driver_pci_mmio_write32")) {
+        return TOK_DRIVER_PCI_MMIO_WRITE32;
+    }
+
+    if (string_equals(text, "driver_dma_alloc")) {
+        return TOK_DRIVER_DMA_ALLOC;
+    }
+
+    if (string_equals(text, "driver_dma_alloc_below")) {
+        return TOK_DRIVER_DMA_ALLOC_BELOW;
+    }
+
+    if (string_equals(text, "driver_dma_phys")) {
+        return TOK_DRIVER_DMA_PHYSICAL;
+    }
+
+    if (string_equals(text, "driver_dma_read")) {
+        return TOK_DRIVER_DMA_READ;
+    }
+
+    if (string_equals(text, "driver_dma_write")) {
+        return TOK_DRIVER_DMA_WRITE;
+    }
+
+    if (string_equals(text, "driver_dma_free")) {
+        return TOK_DRIVER_DMA_FREE;
+    }
+
     if (string_equals(text, "driver_should_stop")) {
         return TOK_DRIVER_SHOULD_STOP;
+    }
+
+    if (string_equals(text, "driver_state_read")) {
+        return TOK_DRIVER_STATE_READ;
+    }
+
+    if (string_equals(text, "driver_state_write")) {
+        return TOK_DRIVER_STATE_WRITE;
+    }
+
+    if (string_equals(text, "driver_pci_subscribe_irq")) {
+        return TOK_DRIVER_PCI_SUBSCRIBE_IRQ;
+    }
+
+    if (string_equals(text, "driver_irq_read")) {
+        return TOK_DRIVER_IRQ_READ;
+    }
+
+    if (string_equals(text, "driver_irq_dropped")) {
+        return TOK_DRIVER_IRQ_DROPPED;
+    }
+
+    if (string_equals(text, "driver_irq_ack")) {
+        return TOK_DRIVER_IRQ_ACK;
     }
 
     if (string_equals(text, "string")) {
@@ -787,6 +943,30 @@ static Token lexer_next(Lexer* lexer, const char** out_error) {
         }
 
         if (is_digit(c)) {
+            if (c == '0'
+                && lexer->position < lexer->length
+                && (lexer->src[lexer->position] == 'x' || lexer->src[lexer->position] == 'X')) {
+                uint32_t value = 0U;
+                uint32_t digits = 0U;
+                lexer->position++;
+                while (lexer->position < lexer->length) {
+                    int digit = hex_digit_value(lexer->src[lexer->position]);
+                    if (digit < 0) {
+                        break;
+                    }
+                    value = (value << 4) | (uint32_t)digit;
+                    lexer->position++;
+                    digits++;
+                }
+                if (digits == 0U) {
+                    *out_error = "expected hexadecimal digits";
+                    return token;
+                }
+                token.type = TOK_NUMBER;
+                token.number = (int32_t)value;
+                return token;
+            }
+
             int32_t value = (int32_t)(c - '0');
             int is_float = 0;
             int32_t frac = 0;
@@ -850,6 +1030,10 @@ static Token lexer_next(Lexer* lexer, const char** out_error) {
             case '*': token.type = TOK_STAR; return token;
             case '/': token.type = TOK_SLASH; return token;
             case '%': token.type = TOK_PERCENT; return token;
+            case '&': token.type = TOK_BIT_AND; return token;
+            case '|': token.type = TOK_BIT_OR; return token;
+            case '^': token.type = TOK_BIT_XOR; return token;
+            case '~': token.type = TOK_BIT_NOT; return token;
             case '=':
                 if (lexer->position < lexer->length && lexer->src[lexer->position] == '=') {
                     lexer->position++;
@@ -868,7 +1052,10 @@ static Token lexer_next(Lexer* lexer, const char** out_error) {
                 *out_error = "unexpected character";
                 return token;
             case '<':
-                if (lexer->position < lexer->length && lexer->src[lexer->position] == '=') {
+                if (lexer->position < lexer->length && lexer->src[lexer->position] == '<') {
+                    lexer->position++;
+                    token.type = TOK_SHIFT_LEFT;
+                } else if (lexer->position < lexer->length && lexer->src[lexer->position] == '=') {
                     lexer->position++;
                     token.type = TOK_LTE;
                 } else {
@@ -876,7 +1063,10 @@ static Token lexer_next(Lexer* lexer, const char** out_error) {
                 }
                 return token;
             case '>':
-                if (lexer->position < lexer->length && lexer->src[lexer->position] == '=') {
+                if (lexer->position < lexer->length && lexer->src[lexer->position] == '>') {
+                    lexer->position++;
+                    token.type = TOK_SHIFT_RIGHT;
+                } else if (lexer->position < lexer->length && lexer->src[lexer->position] == '=') {
                     lexer->position++;
                     token.type = TOK_GTE;
                 } else {
@@ -2053,8 +2243,7 @@ static int parse_for_clause_item(PrismCompiler* compiler, int allow_declaration)
 }
 
 static int parse_driver_builtin(PrismCompiler* compiler, TokenType builtin) {
-    uint8_t first_type;
-    uint8_t second_type;
+    uint8_t argument_count;
 
     if (!compiler->driver_mode) {
         compiler->error = "driver hardware APIs are only available in .pdr/.pdrv modules";
@@ -2066,44 +2255,77 @@ static int parse_driver_builtin(PrismCompiler* compiler, TokenType builtin) {
         return -1;
     }
 
-    if (builtin == TOK_DRIVER_SERIAL_READ || builtin == TOK_DRIVER_SHOULD_STOP) {
-        if (expect(compiler, TOK_RPAREN, "expected ')' after driver API") != 0) {
+    switch (builtin) {
+        case TOK_DRIVER_SERIAL_READ:
+        case TOK_DRIVER_SHOULD_STOP:
+        case TOK_DRIVER_IRQ_READ:
+        case TOK_DRIVER_IRQ_DROPPED:
+        case TOK_DRIVER_IRQ_ACK:
+            argument_count = 0U;
+            break;
+        case TOK_DRIVER_SERIAL_WRITE:
+        case TOK_DRIVER_PORT_READ8:
+        case TOK_DRIVER_MMIO_READ32:
+        case TOK_DRIVER_PCI_CLAIM:
+        case TOK_DRIVER_DMA_ALLOC:
+        case TOK_DRIVER_DMA_PHYSICAL:
+        case TOK_DRIVER_DMA_FREE:
+        case TOK_DRIVER_STATE_READ:
+        case TOK_DRIVER_PCI_SUBSCRIBE_IRQ:
+            argument_count = 1U;
+            break;
+        case TOK_DRIVER_PORT_WRITE8:
+        case TOK_DRIVER_MMIO_WRITE32:
+        case TOK_DRIVER_PCI_FIND:
+        case TOK_DRIVER_PCI_READ_CONFIG32:
+        case TOK_DRIVER_PCI_READ_BAR32:
+        case TOK_DRIVER_PCI_ENABLE:
+        case TOK_DRIVER_PCI_DISABLE:
+        case TOK_DRIVER_PCI_CLAIM_IO_BAR:
+        case TOK_DRIVER_PCI_CLAIM_MMIO_BAR:
+        case TOK_DRIVER_PCI_MMIO_READ32:
+        case TOK_DRIVER_DMA_ALLOC_BELOW:
+        case TOK_DRIVER_STATE_WRITE:
+            argument_count = 2U;
+            break;
+        case TOK_DRIVER_PCI_IO_READ:
+        case TOK_DRIVER_PCI_MMIO_WRITE32:
+        case TOK_DRIVER_DMA_READ:
+            argument_count = 3U;
+            break;
+        case TOK_DRIVER_PCI_IO_WRITE:
+        case TOK_DRIVER_DMA_WRITE:
+            argument_count = 4U;
+            break;
+        default:
+            compiler->error = "unsupported driver API";
             return -1;
-        }
-    } else {
-        first_type = guess_expression_type(compiler);
+    }
+
+    for (uint8_t argument = 0U; argument < argument_count; ++argument) {
+        uint8_t argument_type = guess_expression_type(compiler);
         if (parse_expression(compiler) != 0) {
             return -1;
         }
 
         if (builtin == TOK_DRIVER_SERIAL_WRITE) {
-            if (first_type != (uint8_t)LOCAL_TYPE_STRING) {
+            if (argument_type != (uint8_t)LOCAL_TYPE_STRING) {
                 compiler->error = "driver_serial_write requires a string";
                 return -1;
             }
-        } else if (first_type != (uint8_t)LOCAL_TYPE_INT) {
-            compiler->error = "driver hardware addresses and values must be integers";
+        } else if (argument_type != (uint8_t)LOCAL_TYPE_INT) {
+            compiler->error = "driver hardware API arguments must be integers";
             return -1;
         }
 
-        if (builtin == TOK_DRIVER_PORT_WRITE8 || builtin == TOK_DRIVER_MMIO_WRITE32) {
-            if (expect(compiler, TOK_COMMA, "expected ',' before driver value") != 0) {
-                return -1;
-            }
-
-            second_type = guess_expression_type(compiler);
-            if (parse_expression(compiler) != 0) {
-                return -1;
-            }
-            if (second_type != (uint8_t)LOCAL_TYPE_INT) {
-                compiler->error = "driver hardware addresses and values must be integers";
-                return -1;
-            }
-        }
-
-        if (expect(compiler, TOK_RPAREN, "expected ')' after driver API arguments") != 0) {
+        if (argument + 1U < argument_count
+            && expect(compiler, TOK_COMMA, "expected ',' between driver API arguments") != 0) {
             return -1;
         }
+    }
+
+    if (expect(compiler, TOK_RPAREN, "expected ')' after driver API arguments") != 0) {
+        return -1;
     }
 
     switch (builtin) {
@@ -2121,6 +2343,54 @@ static int parse_driver_builtin(PrismCompiler* compiler, TokenType builtin) {
             return emit_u8(compiler, BCVM_OP_DRIVER_MMIO_WRITE32);
         case TOK_DRIVER_SHOULD_STOP:
             return emit_u8(compiler, BCVM_OP_DRIVER_SHOULD_STOP);
+        case TOK_DRIVER_PCI_FIND:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_FIND);
+        case TOK_DRIVER_PCI_READ_CONFIG32:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_READ_CONFIG32);
+        case TOK_DRIVER_PCI_READ_BAR32:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_READ_BAR32);
+        case TOK_DRIVER_PCI_CLAIM:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_CLAIM);
+        case TOK_DRIVER_PCI_ENABLE:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_ENABLE);
+        case TOK_DRIVER_PCI_DISABLE:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_DISABLE);
+        case TOK_DRIVER_PCI_CLAIM_IO_BAR:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_CLAIM_IO_BAR);
+        case TOK_DRIVER_PCI_CLAIM_MMIO_BAR:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_CLAIM_MMIO_BAR);
+        case TOK_DRIVER_PCI_IO_READ:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_IO_READ);
+        case TOK_DRIVER_PCI_IO_WRITE:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_IO_WRITE);
+        case TOK_DRIVER_PCI_MMIO_READ32:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_MMIO_READ32);
+        case TOK_DRIVER_PCI_MMIO_WRITE32:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_MMIO_WRITE32);
+        case TOK_DRIVER_DMA_ALLOC:
+            return emit_u8(compiler, BCVM_OP_DRIVER_DMA_ALLOC);
+        case TOK_DRIVER_DMA_ALLOC_BELOW:
+            return emit_u8(compiler, BCVM_OP_DRIVER_DMA_ALLOC_BELOW);
+        case TOK_DRIVER_DMA_PHYSICAL:
+            return emit_u8(compiler, BCVM_OP_DRIVER_DMA_PHYSICAL);
+        case TOK_DRIVER_DMA_READ:
+            return emit_u8(compiler, BCVM_OP_DRIVER_DMA_READ);
+        case TOK_DRIVER_DMA_WRITE:
+            return emit_u8(compiler, BCVM_OP_DRIVER_DMA_WRITE);
+        case TOK_DRIVER_DMA_FREE:
+            return emit_u8(compiler, BCVM_OP_DRIVER_DMA_FREE);
+        case TOK_DRIVER_STATE_READ:
+            return emit_u8(compiler, BCVM_OP_DRIVER_STATE_READ);
+        case TOK_DRIVER_STATE_WRITE:
+            return emit_u8(compiler, BCVM_OP_DRIVER_STATE_WRITE);
+        case TOK_DRIVER_PCI_SUBSCRIBE_IRQ:
+            return emit_u8(compiler, BCVM_OP_DRIVER_PCI_SUBSCRIBE_IRQ);
+        case TOK_DRIVER_IRQ_READ:
+            return emit_u8(compiler, BCVM_OP_DRIVER_IRQ_READ);
+        case TOK_DRIVER_IRQ_DROPPED:
+            return emit_u8(compiler, BCVM_OP_DRIVER_IRQ_DROPPED);
+        case TOK_DRIVER_IRQ_ACK:
+            return emit_u8(compiler, BCVM_OP_DRIVER_IRQ_ACK);
         default:
             compiler->error = "unsupported driver API";
             return -1;
@@ -2333,12 +2603,102 @@ static int parse_primary(PrismCompiler* compiler) {
         return emit_u8(compiler, BCVM_OP_APP_SHOULD_QUIT);
     }
 
+    if (token.type == TOK_APP_READ_KEY) {
+        if (compiler->driver_mode) {
+            compiler->error = "app_read_key is only available to PrismCC apps";
+            return -1;
+        }
+
+        next_token(compiler);
+        if (expect(compiler, TOK_LPAREN, "expected '(' after app_read_key") != 0
+            || expect(compiler, TOK_RPAREN, "expected ')' after app_read_key") != 0) {
+            return -1;
+        }
+        return emit_u8(compiler, BCVM_OP_APP_READ_KEY);
+    }
+
+    if (token.type == TOK_DRIVER_SERVICE_CALL) {
+        if (compiler->driver_mode) {
+            compiler->error = "driver_service_call is only available to PrismCC apps";
+            return -1;
+        }
+
+        next_token(compiler);
+        if (expect(compiler, TOK_LPAREN, "expected '(' after driver_service_call") != 0) {
+            return -1;
+        }
+        for (uint8_t argument = 0U; argument < 4U; ++argument) {
+            if (guess_expression_type(compiler) != (uint8_t)LOCAL_TYPE_INT
+                || parse_expression(compiler) != 0) {
+                if (compiler->error == 0) {
+                    compiler->error = "driver_service_call arguments must be integers";
+                }
+                return -1;
+            }
+            if (argument + 1U < 4U
+                && expect(compiler, TOK_COMMA,
+                    "expected ',' between driver_service_call arguments") != 0) {
+                return -1;
+            }
+        }
+        if (expect(compiler, TOK_RPAREN,
+                "expected ')' after driver_service_call arguments") != 0) {
+            return -1;
+        }
+        return emit_u8(compiler, BCVM_OP_DRIVER_SERVICE_CALL);
+    }
+
+    if (token.type == TOK_DRIVER_SERVICE_FIND) {
+        if (compiler->driver_mode) {
+            compiler->error = "driver_service_find is only available to PrismCC apps";
+            return -1;
+        }
+
+        next_token(compiler);
+        if (expect(compiler, TOK_LPAREN,
+                "expected '(' after driver_service_find") != 0
+            || guess_expression_type(compiler) != (uint8_t)LOCAL_TYPE_INT
+            || parse_expression(compiler) != 0
+            || expect(compiler, TOK_RPAREN,
+                "expected ')' after driver_service_find argument") != 0) {
+            if (compiler->error == 0) {
+                compiler->error = "driver_service_find argument must be an integer";
+            }
+            return -1;
+        }
+        return emit_u8(compiler, BCVM_OP_DRIVER_SERVICE_FIND);
+    }
+
     if (token.type == TOK_DRIVER_SERIAL_WRITE
         || token.type == TOK_DRIVER_SERIAL_READ
         || token.type == TOK_DRIVER_PORT_READ8
         || token.type == TOK_DRIVER_PORT_WRITE8
         || token.type == TOK_DRIVER_MMIO_READ32
         || token.type == TOK_DRIVER_MMIO_WRITE32
+        || token.type == TOK_DRIVER_PCI_FIND
+        || token.type == TOK_DRIVER_PCI_READ_CONFIG32
+        || token.type == TOK_DRIVER_PCI_READ_BAR32
+        || token.type == TOK_DRIVER_PCI_CLAIM
+        || token.type == TOK_DRIVER_PCI_ENABLE
+        || token.type == TOK_DRIVER_PCI_DISABLE
+        || token.type == TOK_DRIVER_PCI_CLAIM_IO_BAR
+        || token.type == TOK_DRIVER_PCI_CLAIM_MMIO_BAR
+        || token.type == TOK_DRIVER_PCI_IO_READ
+        || token.type == TOK_DRIVER_PCI_IO_WRITE
+        || token.type == TOK_DRIVER_PCI_MMIO_READ32
+        || token.type == TOK_DRIVER_PCI_MMIO_WRITE32
+        || token.type == TOK_DRIVER_DMA_ALLOC
+        || token.type == TOK_DRIVER_DMA_ALLOC_BELOW
+        || token.type == TOK_DRIVER_DMA_PHYSICAL
+        || token.type == TOK_DRIVER_DMA_READ
+        || token.type == TOK_DRIVER_DMA_WRITE
+        || token.type == TOK_DRIVER_DMA_FREE
+        || token.type == TOK_DRIVER_STATE_READ
+        || token.type == TOK_DRIVER_STATE_WRITE
+        || token.type == TOK_DRIVER_PCI_SUBSCRIBE_IRQ
+        || token.type == TOK_DRIVER_IRQ_READ
+        || token.type == TOK_DRIVER_IRQ_DROPPED
+        || token.type == TOK_DRIVER_IRQ_ACK
         || token.type == TOK_DRIVER_SHOULD_STOP) {
         return parse_driver_builtin(compiler, token.type);
     }
@@ -2504,6 +2864,14 @@ static int parse_unary(PrismCompiler* compiler) {
         return emit_u8(compiler, BCVM_OP_NEG);
     }
 
+    if (compiler->lexer.current.type == TOK_BIT_NOT) {
+        next_token(compiler);
+        if (parse_unary(compiler) != 0) {
+            return -1;
+        }
+        return emit_u8(compiler, BCVM_OP_BIT_NOT);
+    }
+
     if (compiler->lexer.current.type == TOK_PLUSPLUS) {
         return parse_prefix_update(compiler, 1);
     }
@@ -2613,8 +2981,28 @@ static int parse_additive(PrismCompiler* compiler) {
     return compiler->error == 0 ? 0 : -1;
 }
 
-static int parse_relational(PrismCompiler* compiler) {
+static int parse_shift(PrismCompiler* compiler) {
     if (parse_additive(compiler) != 0) {
+        return -1;
+    }
+
+    while (compiler->lexer.current.type == TOK_SHIFT_LEFT
+        || compiler->lexer.current.type == TOK_SHIFT_RIGHT) {
+        TokenType op = compiler->lexer.current.type;
+        next_token(compiler);
+
+        if (parse_additive(compiler) != 0
+            || emit_u8(compiler, op == TOK_SHIFT_LEFT
+                ? BCVM_OP_SHIFT_LEFT : BCVM_OP_SHIFT_RIGHT) != 0) {
+            return -1;
+        }
+    }
+
+    return compiler->error == 0 ? 0 : -1;
+}
+
+static int parse_relational(PrismCompiler* compiler) {
+    if (parse_shift(compiler) != 0) {
         return -1;
     }
 
@@ -2625,7 +3013,7 @@ static int parse_relational(PrismCompiler* compiler) {
         TokenType op = compiler->lexer.current.type;
         next_token(compiler);
 
-        if (parse_additive(compiler) != 0) {
+        if (parse_shift(compiler) != 0) {
             return -1;
         }
 
@@ -2651,7 +3039,7 @@ static int parse_relational(PrismCompiler* compiler) {
     return compiler->error == 0 ? 0 : -1;
 }
 
-static int parse_expression(PrismCompiler* compiler) {
+static int parse_equality(PrismCompiler* compiler) {
     if (parse_relational(compiler) != 0) {
         return -1;
     }
@@ -2670,6 +3058,49 @@ static int parse_expression(PrismCompiler* compiler) {
     }
 
     return compiler->error == 0 ? 0 : -1;
+}
+
+static int parse_bitwise_and(PrismCompiler* compiler) {
+    if (parse_equality(compiler) != 0) {
+        return -1;
+    }
+    while (compiler->lexer.current.type == TOK_BIT_AND) {
+        next_token(compiler);
+        if (parse_equality(compiler) != 0 || emit_u8(compiler, BCVM_OP_BIT_AND) != 0) {
+            return -1;
+        }
+    }
+    return compiler->error == 0 ? 0 : -1;
+}
+
+static int parse_bitwise_xor(PrismCompiler* compiler) {
+    if (parse_bitwise_and(compiler) != 0) {
+        return -1;
+    }
+    while (compiler->lexer.current.type == TOK_BIT_XOR) {
+        next_token(compiler);
+        if (parse_bitwise_and(compiler) != 0 || emit_u8(compiler, BCVM_OP_BIT_XOR) != 0) {
+            return -1;
+        }
+    }
+    return compiler->error == 0 ? 0 : -1;
+}
+
+static int parse_bitwise_or(PrismCompiler* compiler) {
+    if (parse_bitwise_xor(compiler) != 0) {
+        return -1;
+    }
+    while (compiler->lexer.current.type == TOK_BIT_OR) {
+        next_token(compiler);
+        if (parse_bitwise_xor(compiler) != 0 || emit_u8(compiler, BCVM_OP_BIT_OR) != 0) {
+            return -1;
+        }
+    }
+    return compiler->error == 0 ? 0 : -1;
+}
+
+static int parse_expression(PrismCompiler* compiler) {
+    return parse_bitwise_or(compiler);
 }
 
 static int parse_block(PrismCompiler* compiler, int* saw_return) {
@@ -3480,7 +3911,7 @@ static int parse_function(PrismCompiler* compiler) {
         return -1;
     }
 
-    if (!saw_return) {
+    if (return_local_type == LOCAL_TYPE_VOID || !saw_return) {
         if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0 || emit_u32(compiler, 0U) != 0 || emit_u8(compiler, BCVM_OP_RET) != 0) {
             return -1;
         }
@@ -3527,6 +3958,11 @@ static int validate_driver_contract(PrismCompiler* compiler) {
     int poll_index = find_function_overload(compiler, "driver_poll", 0U, 0);
     int shutdown_index = find_function_overload(compiler, "driver_shutdown", 0U, 0);
     int main_index = find_function_overload(compiler, "main", 0U, 0);
+    const uint8_t service_argument_types[3] = {
+        (uint8_t)LOCAL_TYPE_INT,
+        (uint8_t)LOCAL_TYPE_INT,
+        (uint8_t)LOCAL_TYPE_INT
+    };
 
     if (init_index < 0 || poll_index < 0 || shutdown_index < 0 || main_index < 0) {
         compiler->error = "driver packages require driver_init(), driver_poll(), driver_shutdown(), and main()";
@@ -3541,6 +3977,20 @@ static int validate_driver_contract(PrismCompiler* compiler) {
     if (compiler->functions[(uint32_t)main_index].return_type != (uint8_t)LOCAL_TYPE_INT) {
         compiler->error = "driver main() must return int";
         return -1;
+    }
+
+    for (uint32_t index = 0U; index < compiler->function_count; ++index) {
+        const FunctionDef* function = &compiler->functions[index];
+        if (!string_equals(function->name, "driver_service")) {
+            continue;
+        }
+        if (function->param_count != 3U
+            || !signature_types_equal(function->param_types,
+                service_argument_types, 3U)
+            || function->return_type != (uint8_t)LOCAL_TYPE_INT) {
+            compiler->error = "driver_service must be int driver_service(int operation, int argument0, int argument1)";
+            return -1;
+        }
     }
 
     return 0;
@@ -3676,6 +4126,9 @@ int prismcc_compile_file(const char* input_abs_path, const char* output_abs_path
     }
 
     vm_image_size = BCVM_IMAGE_HEADER_SIZE + compiler.code_size + compiler.data_size;
+    if (compiler.driver_mode) {
+        vm_image_size += PRISM_DRIVER_ENTRY_TABLE_SIZE;
+    }
     total_size = PRISM_APP_HEADER_SIZE + vm_image_size;
 
     write_u32le(&output_buffer[0], PRISM_APP_MAGIC);
@@ -3698,6 +4151,28 @@ int prismcc_compile_file(const char* input_abs_path, const char* output_abs_path
 
     for (uint32_t i = 0; i < compiler.data_size; i++) {
         output_buffer[PRISM_APP_HEADER_SIZE + BCVM_IMAGE_HEADER_SIZE + compiler.code_size + i] = compiler.data[i];
+    }
+
+    if (compiler.driver_mode) {
+        const uint8_t service_argument_types[3] = {
+            (uint8_t)LOCAL_TYPE_INT,
+            (uint8_t)LOCAL_TYPE_INT,
+            (uint8_t)LOCAL_TYPE_INT
+        };
+        const int service_index = find_function_overload(&compiler,
+            "driver_service", 3U, service_argument_types);
+        uint32_t table_offset = PRISM_APP_HEADER_SIZE + BCVM_IMAGE_HEADER_SIZE
+            + compiler.code_size + compiler.data_size;
+        write_u32le(&output_buffer[table_offset], PRISM_DRIVER_ENTRY_MAGIC);
+        write_u32le(&output_buffer[table_offset + 4U],
+            compiler.functions[(uint32_t)find_function_overload(&compiler, "driver_init", 0U, 0)].entry_offset);
+        write_u32le(&output_buffer[table_offset + 8U],
+            compiler.functions[(uint32_t)find_function_overload(&compiler, "driver_poll", 0U, 0)].entry_offset);
+        write_u32le(&output_buffer[table_offset + 12U],
+            compiler.functions[(uint32_t)find_function_overload(&compiler, "driver_shutdown", 0U, 0)].entry_offset);
+        write_u32le(&output_buffer[table_offset + 16U],
+            service_index < 0 ? PRISM_DRIVER_SERVICE_NONE
+                : compiler.functions[(uint32_t)service_index].entry_offset);
     }
 
     if (vfs_write_file(output_abs_path, (const char*)output_buffer, total_size, 0) != 0) {

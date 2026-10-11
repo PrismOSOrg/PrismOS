@@ -282,8 +282,23 @@ set_fullscreen(0);</code></div>
     <div class="card" id="drivers">
       <h2>PrismCC Driver Modules</h2>
       <p>Compile inside PrismOS to a <code>.pdr</code> package (the FAT32 filesystem uses 8.3 filenames). Driver sources must implement <code>int driver_init()</code>,
-        <code>void driver_poll()</code>, <code>void driver_shutdown()</code>, and <code>int main()</code>. The main
-        function coordinates lifecycle and should poll until <code>driver_should_stop()</code> detects Esc.</p>
+        <code>void driver_poll()</code>, <code>void driver_shutdown()</code>, and <code>int main()</code>. Use
+        <code>driver-start</code>, <code>driver-list</code>, and <code>driver-stop &lt;id&gt;</code> for resident lifecycle
+        callbacks; a resident driver that polls <code>driver_should_stop()</code> shuts down on Esc without consuming
+        other queued keyboard input. The <code>driver-run</code> command runs <code>main()</code> synchronously in the
+        foreground.</p>
+      <div class="api-item">
+        <h3 class="api-title"><code>driver_service_call(id, operation, argument0, argument1)</code> /
+          <code>driver_service_find(serviceType)</code></h3>
+        <p class="api-meta">Apps can synchronously call a resident driver's optional
+          <code>int driver_service(int operation, int argument0, int argument1)</code> callback. The driver's operation
+          <code>0</code> should return <code>1</code> for a matching service type to support automatic discovery.</p>
+      </div>
+      <div class="api-item">
+        <h3 class="api-title"><code>app_read_key()</code></h3>
+        <p class="api-meta">Blocks for one keyboard event and returns its character; Escape returns character code
+          <code>27</code>.</p>
+      </div>
       <div class="api-item">
         <h3 class="api-title"><code>driver_serial_write(string)</code> / <code>driver_serial_read()</code></h3>
         <p class="api-meta">Writes text to COM1 or polls one queued byte. Read returns <code>-1</code> if no byte is queued.</p>
@@ -296,10 +311,25 @@ set_fullscreen(0);</code></div>
         <h3 class="api-title"><code>driver_mmio_read32(address)</code> / <code>driver_mmio_write32(address, value)</code></h3>
         <p class="api-meta">Accesses aligned words only within MMIO regions registered by trusted kernel code using <code>driver_mmio_register_region()</code>.</p>
       </div>
+      <div class="api-item">
+        <h3 class="api-title"><code>driver_pci_subscribe_irq(bdf)</code>, <code>driver_irq_read()</code>, <code>driver_irq_ack()</code></h3>
+        <p class="api-meta">Subscribes to a claimed PCI function's eligible legacy PIC IRQ, queues the IRQ number for <code>driver_poll()</code>, and re-enables the PIC line after the device is serviced and queued events are drained. <code>driver_irq_dropped()</code> reports coalesced or overflowed notifications.</p>
+      </div>
       <p class="note">Place the sample source at <code>/SERDRV.C</code>, create <code>/DRIVERS</code>, then build with
-        <code>cc /SERDRV.C /DRIVERS/SERIAL.PDR</code> and run <code>driver-run /DRIVERS/SERIAL.PDR</code>. Drivers execute
-        in the shared kernel address space and are trusted code, not sandboxed applications. See
+        <code>cc /SERDRV.C /DRIVERS/SERIAL.PDR</code> and start it with <code>driver-start /DRIVERS/SERIAL.PDR</code>.
+        Driver bytecode is interpreted in ring 3 with a separate user page directory; kernel services are exposed only
+        through validated system calls. CPU faults stop the driver and trigger resource cleanup. Resident drivers are
+        round-robin scheduled from the 100 Hz PIT; a timer interrupt requests a yield at BCVM instruction boundaries,
+        checked at least every 128 instructions. IRQs are queued rather than dispatched in interrupt context, and the
+        driver must service the device before acknowledging and re-enabling the PIC line. This is preemptive
+        single-CPU time-slicing, not parallel execution; foreground <code>driver-run</code> remains synchronous.
+        Legacy PIC IRQs only are supported (no MSI/MSI-X or APIC routing). Recompile older packages with the in-OS
+        compiler to add resident lifecycle metadata and IRQ APIs. See
         <code>examples/serdrv.c</code>.</p>
+      <p class="note">The AC'97 audio-service and automatic piano examples are
+        <code>examples/ac97_prismcc.c</code> and <code>examples/piano_prismcc.c</code>. Copy them to
+        <code>/AC97.C</code> and <code>/PIANO.C</code>, compile the driver and app with the in-OS
+        <code>cc</code>, start the driver, then run the app; it discovers the audio service without asking for a driver ID.</p>
     </div>
 
     <div class="card" id="limits">

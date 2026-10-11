@@ -1,6 +1,7 @@
 #include "idt.h"
 #include "irq.h"
 #include "debug/log.h"
+#include "platform/gdt.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -28,6 +29,7 @@ extern void irq6(void);  extern void irq7(void);  extern void irq8(void);
 extern void irq9(void);  extern void irq10(void); extern void irq11(void);
 extern void irq12(void); extern void irq13(void); extern void irq14(void);
 extern void irq15(void);
+extern void isr128(void);
 
 /* -------------------------------------------------------------------------
  * IDT storage
@@ -74,6 +76,9 @@ void idt_init(void)
     GATE(44, irq12); GATE(45, irq13); GATE(46, irq14); GATE(47, irq15);
 
 #undef GATE
+
+    idt_set_gate(0x80U, (uint32_t)(uintptr_t)isr128,
+        GDT_KERNEL_CODE_SELECTOR, 0xEEU);
 
     __asm__ volatile("lidt (%0)" : : "r"(&idtr) : "memory");
     DEBUG_LOG("idt_init: installed IDT with 32 exceptions + 16 IRQs");

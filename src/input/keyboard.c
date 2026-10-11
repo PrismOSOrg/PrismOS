@@ -206,3 +206,11 @@ KeyEvent keyboard_poll_event(void)
 
     return kb_queue_pop();
 }
+
+KeyEvent keyboard_peek_event(void)
+{
+    if (kb_queue_empty()) {
+        return (KeyEvent){KEY_EVENT_NONE, 0, 0};
+    }
+    return kb_queue.buf[kb_queue.tail];
+}
