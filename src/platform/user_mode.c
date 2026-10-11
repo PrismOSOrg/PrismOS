@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "debug/log.h"
+#include "apps/app_manager.h"
 #include "comport/comport.h"
 #include "memory/paging.h"
 #include "memory/pmm.h"
@@ -209,7 +210,8 @@ void syscall_dispatcher(registers_t* regs)
                 break;
             }
             event = keyboard_peek_event();
-            if (event.type == KEY_EVENT_CHARACTER && event.character == 27) {
+            if (event.type == KEY_EVENT_CHARACTER && event.character == 27
+                && !app_manager_foreground_app_active()) {
                 (void)keyboard_poll_event();
                 DEBUG_LOG("resident driver received Escape stop event");
                 context->stop_requested = 1U;

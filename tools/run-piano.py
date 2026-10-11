@@ -12,6 +12,7 @@ DISK_SIZE = 64 * 1024 * 1024
 PARTITION_OFFSET = 2048 * 512
 SERIAL_READY = "shell_run entered"
 COMPILE_DONE = "in-OS prismcc compile completed"
+COMPILE_FAILED = "in-OS prismcc compile failed"
 DRIVER_READY = "resident driver initialization completed"
 APP_RUNNING = "app runtime dispatching BCVM app"
 
@@ -60,7 +61,10 @@ def wait_for_log(log_path, marker, timeout, process, occurrences=1):
         if process.poll() is not None:
             raise RuntimeError(f"QEMU exited with status {process.returncode}")
         try:
-            if log_path.read_text(errors="replace").count(marker) >= occurrences:
+            log = log_path.read_text(errors="replace")
+            if marker == COMPILE_DONE and COMPILE_FAILED in log:
+                raise RuntimeError(f"PrismCC compilation failed.\n{log}")
+            if log.count(marker) >= occurrences:
                 return
         except FileNotFoundError:
             pass

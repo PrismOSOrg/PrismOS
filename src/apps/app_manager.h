@@ -17,6 +17,7 @@ int app_manager_driver_service_find(int32_t service_type);
 int app_manager_stop_driver(uint32_t id);
 void app_manager_list_drivers(void);
 void app_manager_driver_tick(void);
+int app_manager_foreground_app_active(void);
 int app_manager_run_editor(const char* target_abs_path);
 int app_manager_run_ide(const char* target_abs_path);
 

@@ -43,6 +43,7 @@ static resident_driver_t resident_drivers[RESIDENT_DRIVER_MAX];
 static uint32_t resident_driver_cursor;
 static uint32_t resident_driver_last_tick_ms;
 static int app_manager_ready = 0;
+static int foreground_app_active;
 
 static uint32_t read_u32le(const uint8_t* source) {
     return (uint32_t)source[0]
@@ -235,6 +236,7 @@ int app_manager_run_path(const char* app_abs_path, const char* args) {
     app_loader_image_t image;
     const uint8_t* entry;
     uint32_t entry_size;
+    int result;
 
     if (!app_manager_ready || app_abs_path == 0) {
         ERROR_LOG("app manager run rejected: not ready or invalid path");
@@ -278,7 +280,10 @@ int app_manager_run_path(const char* app_abs_path, const char* args) {
     entry = image.image + image.entry_offset;
     entry_size = image.image_size - image.entry_offset;
     DEBUG_LOG("app manager invoking runtime");
-    return app_runtime_run(entry, entry_size, args == 0 ? "" : args);
+    foreground_app_active = 1;
+    result = app_runtime_run(entry, entry_size, args == 0 ? "" : args);
+    foreground_app_active = 0;
+    return result;
 }
 
 int app_manager_run_driver_path(const char* driver_abs_path) {
@@ -546,6 +551,10 @@ void app_manager_driver_tick(void) {
         }
         return;
     }
+}
+
+int app_manager_foreground_app_active(void) {
+    return foreground_app_active;
 }
 
 int app_manager_run_editor(const char* target_abs_path) {

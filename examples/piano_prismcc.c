@@ -20,6 +20,8 @@ int main() {
     int key;
     int frequency;
     int result;
+    int stop_result;
+    int released;
 
     print("PrismOS mini piano");
     print("White keys: Z X C V B N M ,   Black keys: S D G H J");
@@ -37,10 +39,19 @@ int main() {
         if (key != 27) {
             frequency = piano_frequency(key);
             if (frequency > 0) {
-                result = driver_service_call(driver_id, 1, frequency, 90);
+                result = driver_service_call(driver_id, 1, frequency, 0);
                 if (result != 0) {
                     print("Audio driver service failed; check driver-list.");
                     return 1;
+                }
+                released = app_wait_key_release(key);
+                stop_result = driver_service_call(driver_id, 2, 0, 0);
+                if (stop_result != 0) {
+                    print("Audio driver could not stop the tone.");
+                    return 1;
+                }
+                if (released == 0) {
+                    key = app_read_key();
                 }
             }
         }

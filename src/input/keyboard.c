@@ -21,6 +21,7 @@ typedef struct {
 } KeyEventQueue;
 
 static KeyEventQueue kb_queue;
+static volatile uint8_t kb_key_pressed[128];
 
 static int kb_queue_empty(void)  { return kb_queue.head == kb_queue.tail; }
 static int kb_queue_full(void)   { return ((kb_queue.head + 1U) % KB_QUEUE_SIZE) == kb_queue.tail; }
@@ -98,6 +99,7 @@ static void keyboard_irq_handler(registers_t *regs)
     /* Key-release events */
     if (scancode & 0x80) {
         unsigned char key = (unsigned char)(scancode & 0x7F);
+        kb_key_pressed[key] = 0U;
         if (key == 42 || key == 54) { /* left/right shift */
             shift_pressed = 0;
         }
@@ -127,6 +129,7 @@ static void keyboard_irq_handler(registers_t *regs)
         return;
     }
 
+    kb_key_pressed[scancode] = 1U;
     if (scancode == 42 || scancode == 54) { shift_pressed = 1; return; }
     if (scancode == 29) { ctrl_pressed = 1; return; }
     if (scancode == 58) { caps_lock = !caps_lock; return; }
@@ -163,6 +166,9 @@ void keyboard_init(void)
 {
     kb_queue.head = 0;
     kb_queue.tail = 0;
+    for (uint32_t index = 0U; index < 128U; ++index) {
+        kb_key_pressed[index] = 0U;
+    }
 
     irq_register_handler(1, keyboard_irq_handler);
     pic_unmask_irq(1);
@@ -213,4 +219,21 @@ KeyEvent keyboard_peek_event(void)
         return (KeyEvent){KEY_EVENT_NONE, 0, 0};
     }
     return kb_queue.buf[kb_queue.tail];
+}
+
+int keyboard_key_pressed(char character)
+{
+    if (character >= 'A' && character <= 'Z') {
+        character = (char)(character - 'A' + 'a');
+    }
+    for (uint32_t index = 0U; index < 128U; ++index) {
+        char mapped = keyboard_map[index];
+        if (mapped >= 'A' && mapped <= 'Z') {
+            mapped = (char)(mapped - 'A' + 'a');
+        }
+        if (mapped == character && kb_key_pressed[index] != 0U) {
+            return 1;
+        }
+    }
+    return 0;
 }

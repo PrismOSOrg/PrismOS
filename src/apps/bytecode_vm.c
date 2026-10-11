@@ -325,6 +325,17 @@ static int vm_poll_quit_request(void) {
     return vm_event_requests_quit(event);
 }
 
+static int vm_wait_key_release(char character) {
+    while (keyboard_key_pressed(character)) {
+        if (keyboard_key_pressed(27)) {
+            return 0;
+        }
+        __asm__ volatile("hlt");
+        app_manager_driver_tick();
+    }
+    return keyboard_key_pressed(27) ? 0 : 1;
+}
+
 static int32_t vm_read_int(void) {
     char buffer[32];
     uint32_t length = 0;
@@ -1279,6 +1290,16 @@ static int bytecode_vm_run_context(const uint8_t* image, uint32_t image_size,
                 }
                 break;
             }
+            case BCVM_OP_APP_WAIT_KEY_RELEASE:
+                if (sp == 0U) {
+                    return -1;
+                }
+                if (vm_wait_key_release((char)stack[sp - 1U]) == 0) {
+                    stack[sp - 1U] = 0;
+                } else {
+                    stack[sp - 1U] = 1;
+                }
+                break;
             case BCVM_OP_DRIVER_SERVICE_CALL: {
                 int32_t argument1;
                 int32_t argument0;

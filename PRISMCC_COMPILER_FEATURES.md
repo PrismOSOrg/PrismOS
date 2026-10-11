@@ -127,6 +127,7 @@ Notes:
 - `read_text(promptStringExpr)`
 - `input_int()`
 - `app_read_key()` -> blocks for one key and returns its character, newline, backspace, or `-1` for an unsupported key
+- `app_wait_key_release(key)` -> blocks until a physical key is released, yielding time to resident drivers while it waits; returns `0` if Escape was pressed instead
 - `driver_service_call(driverId, operation, argument0, argument1)` -> synchronously calls a resident PrismCC driver's exported service and returns its integer result, or `-1` if unavailable/failed
 - `driver_service_find(serviceType)` -> returns the first running resident driver that accepts service-discovery operation `0` with the given service type, or `-1` if none is available
 - `print_input()`
@@ -195,7 +196,7 @@ Driver hardware built-ins are compiled into BCVM operations and run by the ring-
 
 Each driver instance may claim one PCI device and at most eight BAR I/O regions, eight BAR MMIO regions, and eight DMA buffers. BAR I/O and MMIO handles are bounds-checked; I/O regions cannot overlap COM1. DMA buffers map into a dedicated virtual window and may reside below the requested physical address limit. The runtime disables bus mastering before reclaiming DMA memory, removes dynamic MMIO mappings, restores PCI command bits, and releases the device after normal exit or a contained user-mode fault. Drivers execute with user page permissions and cannot directly access supervisor memory or issue port I/O instructions; only the documented syscall services are available. BCVM packages containing app-only input, filesystem, or UI opcodes are rejected by the driver loader.
 
-The AC'97 sample in `examples/ac97_prismcc.c` advertises audio service type `0x41554449` (`AUDI`) and exports operation `1` to play a sine-wave note using `argument0` as frequency in hertz and `argument1` as duration in milliseconds (1-200 ms). It requires an AC'97 codec with variable-rate audio support, so it reuses a precomputed waveform and descriptor table rather than generating samples for each keypress. `examples/piano_prismcc.c` is a keyboard-driven app using `app_read_key()`, automatic service discovery, and the generic service call.
+The AC'97 sample in `examples/ac97_prismcc.c` advertises audio service type `0x41554449` (`AUDI`), exports operation `1` to start a continuous tone using `argument0` as frequency in hertz, and operation `2` to stop playback. It requires an AC'97 codec with variable-rate audio support. A precomputed sine wave is repeated through a long DMA descriptor chain, and the resident driver restarts the chain if it reaches its end. `examples/piano_prismcc.c` discovers the audio service automatically and holds each tone until its physical key is released.
 
 For a one-command QEMU setup, run `make run-piano`. It rebuilds the ISO, recreates the dedicated `build/piano-disk.img` without touching the normal disk image, copies both sources onto it, and automatically compiles and launches the piano with the AC'97 device attached. The audio backend defaults to silent; set `QEMU_AUDIO_BACKEND=alsa` or `QEMU_AUDIO_BACKEND=pa` if that host backend is available.
 

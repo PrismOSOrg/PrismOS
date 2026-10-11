@@ -3,7 +3,8 @@
 //   cc /AC97.C /DRIVERS/AC97.PDR
 // Start with driver-start /DRIVERS/AC97.PDR and stop with driver-stop <id>.
 // driver_service(0, service_id, 0) advertises the audio service.
-// driver_service(1, frequency_hz, duration_ms) plays one sine-wave note.
+// driver_service(1, frequency_hz, 0) starts a continuous sine-wave tone.
+// driver_service(2, 0, 0) stops the tone.
 
 int ac97_wave_sample(int phase) {
     int index;
@@ -52,27 +53,17 @@ int ac97_wave_sample(int phase) {
     return -8082;
 }
 
-int ac97_play_note(int frequency, int duration_ms) {
+int ac97_start_tone(int frequency) {
     int busmaster;
     int mixer;
     int dma;
     int dma_phys;
-    int repetitions;
-    int descriptor;
-    int sample;
-    int packed_sample;
-    int control;
+    int result;
 
     if (frequency < 250) {
         return -1;
     }
     if (frequency > 600) {
-        return -1;
-    }
-    if (duration_ms < 1) {
-        return -1;
-    }
-    if (duration_ms > 200) {
         return -1;
     }
     busmaster = driver_state_read(2) - 1;
@@ -102,23 +93,37 @@ int ac97_play_note(int frequency, int duration_ms) {
         return -1;
     }
 
-    repetitions = duration_ms * frequency / 1000;
-    if ((duration_ms * frequency % 1000) != 0) {
-        repetitions = repetitions + 1;
-    }
-    if (repetitions < 1) {
-        repetitions = 1;
-    }
     if (driver_pci_io_write(busmaster, 0x10, 4, dma_phys) != 0) {
         return -1;
     }
-    if (driver_pci_io_write(busmaster, 0x15, 1, repetitions - 1) != 0) {
+    if (driver_pci_io_write(busmaster, 0x15, 1,
+            127) != 0) {
+        return -1;
+    }
+    if (driver_state_write(4, 1) != 0) {
         return -1;
     }
     if (driver_pci_io_write(busmaster, 0x1B, 1, 0x01) != 0) {
+        result = driver_state_write(4, 0);
         return -1;
     }
     return 0;
+}
+
+int ac97_stop_tone() {
+    int busmaster;
+
+    busmaster = driver_state_read(2) - 1;
+    if (busmaster < 0) {
+        return -1;
+    }
+    if (driver_pci_io_write(busmaster, 0x1B, 1, 0) != 0) {
+        return -1;
+    }
+    if (driver_pci_io_write(busmaster, 0x16, 2, 0x1C) != 0) {
+        return -1;
+    }
+    return driver_state_write(4, 0);
 }
 
 int driver_init() {
@@ -133,6 +138,7 @@ int driver_init() {
     int descriptor;
     int sample;
     int packed_sample;
+    int phase;
 
     controller = driver_pci_find(0x8086, 0x2415);
     if (controller < 0) {
@@ -212,8 +218,9 @@ int driver_init() {
     }
 
     frame = 0;
-    while (frame < 32) {
-        sample = ac97_wave_sample(frame);
+    while (frame < 4096) {
+        phase = frame % 32;
+        sample = ac97_wave_sample(phase);
         packed_sample = ((sample & 65535) << 16) | (sample & 65535);
         if (driver_dma_write(dma, 4096 + frame * 4, 4,
                 packed_sample) != 0) {
@@ -229,7 +236,9 @@ int driver_init() {
                 dma_phys + 4096) != 0) {
             return -1;
         }
-        if (driver_dma_write(dma, descriptor * 8 + 4, 4, 64) != 0) {
+        if (driver_dma_write(dma, descriptor * 8 + 4, 4,
+                8192) != 0) {
+            print("Could not prepare AC'97 descriptor");
             return -1;
         }
         descriptor = descriptor + 1;
@@ -251,14 +260,66 @@ int driver_service(int operation, int argument0, int argument1) {
         return 0;
     }
     if (operation == 1) {
-        return ac97_play_note(argument0, argument1);
+        return ac97_start_tone(argument0);
+    }
+    if (operation == 2) {
+        return ac97_stop_tone();
     }
     return -1;
 }
 
 void driver_poll() {
     int should_stop;
+    int audio_active;
+    int busmaster;
+    int status;
+    int dma;
+    int dma_phys;
+    int result;
+
     should_stop = driver_should_stop();
+    audio_active = driver_state_read(4);
+    if (audio_active != 1) {
+        return;
+    }
+    busmaster = driver_state_read(2) - 1;
+    dma = driver_state_read(3) - 1;
+    if ((busmaster < 0) | (dma < 0)) {
+        print("AC'97 playback state is invalid");
+        result = driver_state_write(4, 0);
+        return;
+    }
+    status = driver_pci_io_read(busmaster, 0x16, 2);
+    if (status < 0) {
+        print("Could not read AC'97 playback status");
+        result = driver_state_write(4, 0);
+        return;
+    }
+    if ((status & 1) == 0) {
+        return;
+    }
+
+    dma_phys = driver_dma_phys(dma);
+    if (dma_phys < 0) {
+        print("AC'97 playback DMA address is invalid");
+        result = driver_state_write(4, 0);
+        return;
+    }
+    result = driver_pci_io_write(busmaster, 0x16, 2, status & 0x1C);
+    if (result == 0) {
+        result = driver_pci_io_write(busmaster, 0x10, 4, dma_phys);
+    }
+    if (result == 0) {
+        result = driver_pci_io_write(busmaster, 0x15, 1,
+            127);
+    }
+    if (result == 0) {
+        result = driver_pci_io_write(busmaster, 0x1B, 1, 0x01);
+    }
+    if (result != 0) {
+        print("Could not restart AC'97 playback");
+        result = driver_state_write(4, 0);
+    }
 }
 
 void driver_shutdown() {

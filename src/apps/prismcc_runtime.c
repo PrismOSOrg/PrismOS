@@ -50,6 +50,7 @@ typedef enum {
     TOK_SET_FULLSCREEN,
     TOK_APP_SHOULD_QUIT,
     TOK_APP_READ_KEY,
+    TOK_APP_WAIT_KEY_RELEASE,
     TOK_APP_EXIT,
     TOK_DRIVER_SERVICE_CALL,
     TOK_DRIVER_SERVICE_FIND,
@@ -713,6 +714,10 @@ static TokenType keyword_type(const char* text) {
 
     if (string_equals(text, "app_read_key")) {
         return TOK_APP_READ_KEY;
+    }
+
+    if (string_equals(text, "app_wait_key_release")) {
+        return TOK_APP_WAIT_KEY_RELEASE;
     }
 
     if (string_equals(text, "app_exit")) {
@@ -2615,6 +2620,20 @@ static int parse_primary(PrismCompiler* compiler) {
             return -1;
         }
         return emit_u8(compiler, BCVM_OP_APP_READ_KEY);
+    }
+
+    if (token.type == TOK_APP_WAIT_KEY_RELEASE) {
+        if (compiler->driver_mode) {
+            compiler->error = "app_wait_key_release is only available to PrismCC apps";
+            return -1;
+        }
+        next_token(compiler);
+        if (expect(compiler, TOK_LPAREN, "expected '(' after app_wait_key_release") != 0
+            || parse_expression(compiler) != 0
+            || expect(compiler, TOK_RPAREN, "expected ')' after app_wait_key_release") != 0) {
+            return -1;
+        }
+        return emit_u8(compiler, BCVM_OP_APP_WAIT_KEY_RELEASE);
     }
 
     if (token.type == TOK_DRIVER_SERVICE_CALL) {

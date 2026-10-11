@@ -44,4 +44,7 @@ KeyEvent keyboard_poll_event(void);
  * polled by this function. */
 KeyEvent keyboard_peek_event(void);
 
+/* Return whether a physical key matching this translated character is held. */
+int keyboard_key_pressed(char character);
+
 #endif
