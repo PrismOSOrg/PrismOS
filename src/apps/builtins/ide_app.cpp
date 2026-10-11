@@ -1,22 +1,16 @@
-#include "apps/ide_app.h"
-#include "apps/prismcc_runtime.h"
+#include "apps/builtins/ide_app.hpp"
 
 #include <stdint.h>
 
-#include "debug/log.h"
-#include "display/console.h"
-#include "filesystem/vfs.h"
-#include "input/keyboard.h"
-#include "util/string.h"
-#include "util/clipboard.h"
+#include "apps/builtins/prismcc.hpp"
 
-#define IDE_MAX_TEXT (16U * 1024U)
-#define IDE_MAX_PATH 128U
-#define IDE_TAB_WIDTH 4U
-#define IDE_MAX_VISIBLE_ROWS 128U
-#define IDE_GUTTER_WIDTH 5U
+constexpr uint32_t IDE_MAX_TEXT = 16U * 1024U;
+constexpr uint32_t IDE_MAX_PATH = 128U;
+constexpr uint32_t IDE_TAB_WIDTH = 4U;
+constexpr uint32_t IDE_MAX_VISIBLE_ROWS = 128U;
+constexpr uint32_t IDE_GUTTER_WIDTH = 5U;
 
-typedef struct {
+struct EditorState {
     char path[IDE_MAX_PATH];
     char text[IDE_MAX_TEXT + 1U];
     uint32_t length;
@@ -37,7 +31,9 @@ typedef struct {
     uint32_t prev_visible_rows;
     uint32_t prev_row_signature[IDE_MAX_VISIBLE_ROWS];
     uint8_t prev_row_valid[IDE_MAX_VISIBLE_ROWS];
-} EditorState;
+};
+
+using namespace PrismCC;
 
 static void copy_limited(char* dst, uint32_t capacity, const char* src) {
     uint32_t i = 0;

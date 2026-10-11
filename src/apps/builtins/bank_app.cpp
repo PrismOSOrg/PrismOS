@@ -1,28 +1,27 @@
-#include "apps/bank_app.h"
+#include "apps/builtins/bank_app.hpp"
 
 #include <stdint.h>
 
-#include "debug/log.h"
-#include "display/console.h"
-#include "filesystem/vfs.h"
-#include "input/keyboard.h"
+#include "apps/builtins/prismcc.hpp"
 
-#define BANK_DIR_PATH "/DATA/BANK"
-#define BANK_DB_PATH "/DATA/BANK/ACCOUNTS.DB"
-#define BANK_MAX_ACCOUNTS 64U
-#define BANK_NAME_MAX 31U
-#define BANK_PASS_MAX 31U
-#define BANK_FILE_BUFFER 8192U
+constexpr const char* BANK_DIR_PATH = "/DATA/BANK";
+constexpr const char* BANK_DB_PATH = "/DATA/BANK/ACCOUNTS.DB";
+constexpr uint32_t BANK_MAX_ACCOUNTS = 64U;
+constexpr uint32_t BANK_NAME_MAX = 31U;
+constexpr uint32_t BANK_PASS_MAX = 31U;
+constexpr uint32_t BANK_FILE_BUFFER = 8192U;
 
-typedef struct {
+struct BankAccount {
     char username[BANK_NAME_MAX + 1U];
     char password[BANK_PASS_MAX + 1U];
     int32_t balance;
-} BankAccount;
+};
 
 static BankAccount bank_accounts[BANK_MAX_ACCOUNTS];
 static uint32_t bank_account_count = 0;
 static char bank_file_buffer[BANK_FILE_BUFFER + 1U];
+
+using namespace PrismCC;
 
 static void copy_limited(char* dst, uint32_t capacity, const char* src) {
     uint32_t i = 0;

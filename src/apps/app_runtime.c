@@ -1,10 +1,10 @@
 #include "apps/app_runtime.h"
 
 #include "apps/app_format.h"
-#include "apps/bank_app.h"
+#include "apps/builtins/bank_app.hpp"
 #include "apps/bytecode_vm.h"
-#include "apps/editor_app.h"
-#include "apps/ide_app.h"
+#include "apps/builtins/editor_app.hpp"
+#include "apps/builtins/ide_app.hpp"
 #include "debug/log.h"
 
 static int string_equals(const char* left, const char* right) {

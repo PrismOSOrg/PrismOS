@@ -3,6 +3,8 @@ LD=gcc
 
 CPPFLAGS=-Isrc
 CFLAGS=-m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie
+CXXFLAGS=-m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie \
+	-fno-exceptions -fno-rtti -fno-use-cxa-atexit -fno-threadsafe-statics -fno-builtin
 LDFLAGS=-m32 -T boot/linker.ld -ffreestanding -nostdlib -no-pie -Wl,--build-id=none
 
 BUILD=build
@@ -18,7 +20,7 @@ QEMU_FLAGS=-boot order=d -cdrom $(BUILD)/os.iso \
 	-drive file=$(QEMU_DISK_IMAGE),format=$(QEMU_DISK_FORMAT),if=ide,index=0,media=disk \
 	-monitor none
 
-.PHONY: all run run-serial run-serial-log run-vhdx run-secondary run-net run-net-serial run-ac97 run-piano check-disk-unmounted mount-disk unmount-disk mount-vhdx unmount-vhdx prismcc clean
+.PHONY: all run run-serial run-serial-log run-vhdx run-secondary run-net run-net-serial run-ac97 run-piano check-disk-unmounted mount-disk unmount-disk mount-vhdx unmount-vhdx prismcc new-builtin clean
 
 all: os.iso
 
@@ -85,9 +87,7 @@ $(BUILD)/fat32.o \
 $(BUILD)/vfs.o
 
 BUILTIN_APP_OBJS = \
-$(BUILD)/bank_app.o \
-$(BUILD)/editor_app.o \
-$(BUILD)/ide_app.o
+$(patsubst src/apps/builtins/%.cpp,$(BUILD)/%.o,$(wildcard src/apps/builtins/*_app.cpp))
 
 APP_OBJS = \
 $(BUILD)/app_loader.o \
@@ -145,14 +145,11 @@ $(BUILD)/e1000.o: src/net/drivers/e1000.c | $(BUILD)
 $(BUILD)/%.o: src/apps/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/bank_app.o: src/apps/builtins/bank_app.c | $(BUILD)
-	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+$(BUILD)/%_app.o: src/apps/builtins/%_app.cpp $(wildcard src/apps/builtins/*.hpp) | $(BUILD)
+	g++ $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/editor_app.o: src/apps/builtins/editor_app.c | $(BUILD)
-	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ide_app.o: src/apps/builtins/ide_app.c | $(BUILD)
-	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+new-builtin:
+	python3 tools/new_builtin_app.py NAME="$(NAME)" ID="$(ID)"
 
 $(BUILD)/user_driver_vm.o: src/apps/user_driver_vm.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -fno-inline -fno-jump-tables \

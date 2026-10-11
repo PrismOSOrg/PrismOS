@@ -1,18 +1,14 @@
-#include "apps/editor_app.h"
+#include "apps/builtins/editor_app.hpp"
 
 #include <stdint.h>
 
-#include "debug/log.h"
-#include "display/console.h"
-#include "filesystem/vfs.h"
-#include "input/keyboard.h"
-#include "util/clipboard.h"
+#include "apps/builtins/prismcc.hpp"
 
-#define EDITOR_MAX_TEXT (16U * 1024U)
-#define EDITOR_MAX_PATH 128U
-#define EDITOR_MAX_VISIBLE_ROWS 128U
+constexpr uint32_t EDITOR_MAX_TEXT = 16U * 1024U;
+constexpr uint32_t EDITOR_MAX_PATH = 128U;
+constexpr uint32_t EDITOR_MAX_VISIBLE_ROWS = 128U;
 
-typedef struct {
+struct EditorState {
     char path[EDITOR_MAX_PATH];
     char text[EDITOR_MAX_TEXT + 1U];
     uint32_t length;
@@ -33,7 +29,9 @@ typedef struct {
     uint32_t prev_visible_rows;
     uint32_t prev_row_signature[EDITOR_MAX_VISIBLE_ROWS];
     uint8_t prev_row_valid[EDITOR_MAX_VISIBLE_ROWS];
-} EditorState;
+};
+
+using namespace PrismCC;
 
 static void copy_limited(char* dst, uint32_t capacity, const char* src) {
     uint32_t i = 0;

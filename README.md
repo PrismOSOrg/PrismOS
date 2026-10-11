@@ -306,6 +306,20 @@ The app stores accounts locally in:
 
 Each account record contains username, password, and balance, and supports login, deposit, and withdrawal.
 
+## Built-in C++ Applications
+
+Create a new kernel-linked built-in with one command:
+
+```sh
+make new-builtin NAME=weather ID=WEATHER
+```
+
+The command creates the C++ source and `.hpp`, registers the app in the build,
+runtime dispatcher, and `/APPS` package installer. Edit the generated source
+and run `make kernel.elf`. See
+[src/apps/builtins/BUILTIN_APPS.md](src/apps/builtins/BUILTIN_APPS.md) for the
+short reference.
+
 ## Program Data Folder
 
 PrismOS now creates a dedicated program-data folder during boot:
