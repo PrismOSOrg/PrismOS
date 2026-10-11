@@ -1,8 +1,9 @@
 #include "apps/app_loader.h"
 
+#include "debug/log.h"
 #include "filesystem/vfs.h"
 
-#define APP_LOADER_MAX_IMAGE_SIZE (64U * 1024U)
+#define APP_LOADER_MAX_IMAGE_SIZE (96U * 1024U)
 
 static uint8_t app_image_buffer[APP_LOADER_MAX_IMAGE_SIZE + 1U];
 
@@ -30,14 +31,17 @@ static int parse_prism_header(const uint8_t* bytes, uint32_t size, prism_app_hea
     out_header->reserved = read_u32le(&bytes[16]);
 
     if (out_header->magic != PRISM_APP_MAGIC || out_header->version != PRISM_APP_FORMAT_VERSION) {
+        ERROR_LOG("app loader rejected invalid Prism app header");
         return -1;
     }
 
     if (out_header->image_size > (size - PRISM_APP_HEADER_SIZE)) {
+        ERROR_LOG("app loader rejected truncated Prism app image");
         return -1;
     }
 
     if (out_header->entry_offset >= out_header->image_size) {
+        ERROR_LOG("app loader rejected invalid Prism app entry offset");
         return -1;
     }
 
@@ -53,6 +57,7 @@ int app_loader_load_image(const char* abs_path, app_loader_image_t* out_image) {
     }
 
     if (vfs_read_file(abs_path, (char*)app_image_buffer, sizeof(app_image_buffer), &file_size) != 0) {
+        ERROR_LOG("app loader could not read app file");
         return -1;
     }
 

@@ -155,6 +155,17 @@ print_int(count);</code></div>
       </div>
 
       <div class="api-item">
+        <h3 class="api-title"><code>read_key()</code></h3>
+        <p class="api-meta">Blocks until a key event is available and returns its integer character value.</p>
+        <p>The result can be assigned or used directly as an <code>if</code> condition. Enter and backspace return
+          their control-character values; unsupported non-character keys return <code>-1</code>. Built-in constants
+          such as <code>KEY_W</code> and <code>KEY_ESCAPE</code> can be used for comparisons.</p>
+        <div class="api-example"><code>if (read_key() == KEY_ESCAPE) {
+    app_exit();
+}</code></div>
+      </div>
+
+      <div class="api-item">
         <h3 class="api-title"><code>print_input()</code></h3>
         <p class="api-meta">Prints the current input buffer back to the console.</p>
         <p>Use this for echoing the user’s last input or debugging interactive flows.</p>
@@ -295,7 +306,7 @@ set_fullscreen(0);</code></div>
           <code>0</code> should return <code>1</code> for a matching service type to support automatic discovery.</p>
       </div>
       <div class="api-item">
-        <h3 class="api-title"><code>app_read_key()</code></h3>
+        <h3 class="api-title"><code>read_key()</code></h3>
         <p class="api-meta">Blocks for one keyboard event and returns its character; Escape returns character code
           <code>27</code>.</p>
       </div>
@@ -367,7 +378,7 @@ set_fullscreen(0);</code></div>
         <li>Write a source file.</li>
         <li>Optionally split reusable code into headers and include them.</li>
         <li>Compile in PrismOS shell with <code>cc /path/program.c /path/program.app</code>.</li>
-        <li>Run it with <code>app-run /path/program.app</code>.</li>
+        <li>Run it with <code>/path/program.app</code>.</li>
       </ol>
       <div class="api-item">
         <h3 class="api-title"><code>cc &lt;input.c&gt; &lt;output.app&gt;</code></h3>
@@ -376,10 +387,10 @@ set_fullscreen(0);</code></div>
         <div class="api-example"><code>cc /HELLO.C /HELLO.APP</code></div>
       </div>
       <div class="api-item">
-        <h3 class="api-title"><code>app-run &lt;output.app&gt;</code></h3>
+        <h3 class="api-title"><code>/path/program.app</code></h3>
         <p class="api-meta">Launches a compiled Prism app on the VM.</p>
         <p>Use this after compilation to execute the generated app package.</p>
-        <div class="api-example"><code>app-run /HELLO.APP</code></div>
+        <div class="api-example"><code>/HELLO.APP</code></div>
       </div>
 
       <div class="api-item">

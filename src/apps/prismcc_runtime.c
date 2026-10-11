@@ -54,6 +54,7 @@ typedef enum {
     TOK_APP_EXIT,
     TOK_DRIVER_SERVICE_CALL,
     TOK_DRIVER_SERVICE_FIND,
+    TOK_SYSTEM,
     TOK_DRAW_PIXEL,
     TOK_DRIVER_SERIAL_WRITE,
     TOK_DRIVER_SERIAL_READ,
@@ -91,6 +92,7 @@ typedef enum {
     TOK_WHILE,
     TOK_FOR,
     TOK_STRUCT,
+    TOK_CLASS,
     TOK_STRING_TYPE,
     TOK_IDENTIFIER,
     TOK_NUMBER,
@@ -712,7 +714,7 @@ static TokenType keyword_type(const char* text) {
         return TOK_APP_SHOULD_QUIT;
     }
 
-    if (string_equals(text, "app_read_key")) {
+    if (string_equals(text, "read_key") || string_equals(text, "app_read_key")) {
         return TOK_APP_READ_KEY;
     }
 
@@ -882,6 +884,14 @@ static TokenType keyword_type(const char* text) {
 
     if (string_equals(text, "struct")) {
         return TOK_STRUCT;
+    }
+
+    if (string_equals(text, "class")) {
+        return TOK_CLASS;
+    }
+
+    if (string_equals(text, "system")) {
+        return TOK_SYSTEM;
     }
 
     return TOK_IDENTIFIER;
@@ -1700,9 +1710,12 @@ static int parse_struct_variable_declaration(PrismCompiler* compiler, int expect
     uint16_t array_length = 0;
     int is_array = 0;
 
-    if (expect(compiler, TOK_STRUCT, "expected 'struct'") != 0) {
+    if (compiler->lexer.current.type != TOK_STRUCT
+        && compiler->lexer.current.type != TOK_CLASS) {
+        compiler->error = "expected 'struct' or 'class'";
         return -1;
     }
+    next_token(compiler);
 
     if (!token_is_name(compiler->lexer.current.type)) {
         compiler->error = "expected struct type name";
@@ -1776,9 +1789,12 @@ static int parse_struct_definition(PrismCompiler* compiler) {
     char struct_name[PRISMCC_MAX_TOKEN_TEXT];
     StructDef* def;
 
-    if (expect(compiler, TOK_STRUCT, "expected 'struct'") != 0) {
+    if (compiler->lexer.current.type != TOK_STRUCT
+        && compiler->lexer.current.type != TOK_CLASS) {
+        compiler->error = "expected 'struct' or 'class'";
         return -1;
     }
+    next_token(compiler);
 
     if (!token_is_name(compiler->lexer.current.type)) {
         compiler->error = "expected struct name";
@@ -2136,7 +2152,8 @@ static int parse_for_clause_item(PrismCompiler* compiler, int allow_declaration)
         return parse_for_string_declaration(compiler);
     }
 
-    if (compiler->lexer.current.type == TOK_STRUCT) {
+    if (compiler->lexer.current.type == TOK_STRUCT
+        || compiler->lexer.current.type == TOK_CLASS) {
         if (!allow_declaration) {
             compiler->error = "for increment does not support declaration";
             return -1;
@@ -2402,6 +2419,36 @@ static int parse_driver_builtin(PrismCompiler* compiler, TokenType builtin) {
     }
 }
 
+static int builtin_key_value(const char* name, int32_t* value) {
+    if (name[0] == 'K' && name[1] == 'E' && name[2] == 'Y' && name[3] == '_'
+        && name[5] == '\0') {
+        if (name[4] >= 'A' && name[4] <= 'Z') {
+            *value = (int32_t)name[4] + ('a' - 'A');
+            return 1;
+        }
+        if (name[4] >= '0' && name[4] <= '9') {
+            *value = (int32_t)name[4];
+            return 1;
+        }
+    }
+
+    if (string_equals(name, "KEY_ENTER")) {
+        *value = '\n';
+    } else if (string_equals(name, "KEY_ESCAPE")) {
+        *value = 27;
+    } else if (string_equals(name, "KEY_BACKSPACE")) {
+        *value = '\b';
+    } else if (string_equals(name, "KEY_TAB")) {
+        *value = '\t';
+    } else if (string_equals(name, "KEY_SPACE")) {
+        *value = ' ';
+    } else {
+        return 0;
+    }
+
+    return 1;
+}
+
 static int parse_primary(PrismCompiler* compiler) {
     Token token = compiler->lexer.current;
 
@@ -2610,13 +2657,13 @@ static int parse_primary(PrismCompiler* compiler) {
 
     if (token.type == TOK_APP_READ_KEY) {
         if (compiler->driver_mode) {
-            compiler->error = "app_read_key is only available to PrismCC apps";
+            compiler->error = "read_key is only available to PrismCC apps";
             return -1;
         }
 
         next_token(compiler);
-        if (expect(compiler, TOK_LPAREN, "expected '(' after app_read_key") != 0
-            || expect(compiler, TOK_RPAREN, "expected ')' after app_read_key") != 0) {
+        if (expect(compiler, TOK_LPAREN, "expected '(' after read_key") != 0
+            || expect(compiler, TOK_RPAREN, "expected ')' after read_key") != 0) {
             return -1;
         }
         return emit_u8(compiler, BCVM_OP_APP_READ_KEY);
@@ -2761,12 +2808,21 @@ static int parse_primary(PrismCompiler* compiler) {
     if (token_is_name(token.type)) {
         char name[PRISMCC_MAX_TOKEN_TEXT];
         Local* local;
+        int32_t key_value;
 
         copy_string(name, token.text, sizeof(name));
         next_token(compiler);
 
         if (compiler->lexer.current.type == TOK_LPAREN) {
             return parse_call_after_name(compiler, name, 0);
+        }
+
+        if (builtin_key_value(name, &key_value)) {
+            if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0
+                || emit_u32(compiler, (uint32_t)key_value) != 0) {
+                return -1;
+            }
+            return 0;
         }
 
         local = find_local_entry(compiler, name);
@@ -3339,8 +3395,32 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
         return parse_string_declaration(compiler, 1);
     }
 
-    if (compiler->lexer.current.type == TOK_STRUCT) {
+    if (compiler->lexer.current.type == TOK_STRUCT
+        || compiler->lexer.current.type == TOK_CLASS) {
         return parse_struct_variable_declaration(compiler, 1);
+    }
+
+    if (compiler->lexer.current.type == TOK_SYSTEM) {
+        uint8_t command_type;
+
+        next_token(compiler);
+        if (expect(compiler, TOK_LPAREN, "expected '(' after system") != 0) {
+            return -1;
+        }
+
+        command_type = guess_expression_type(compiler);
+        if (command_type != (uint8_t)LOCAL_TYPE_STRING
+            || parse_expression(compiler) != 0) {
+            compiler->error = "system command must be a string";
+            return -1;
+        }
+
+        if (expect(compiler, TOK_RPAREN, "expected ')' after system command") != 0
+            || expect(compiler, TOK_SEMI, "expected ';' after system") != 0) {
+            return -1;
+        }
+
+        return emit_u8(compiler, BCVM_OP_SYSTEM);
     }
 
     if (compiler->lexer.current.type == TOK_PRINT) {
@@ -4016,8 +4096,12 @@ static int validate_driver_contract(PrismCompiler* compiler) {
 }
 
 static int parse_program(PrismCompiler* compiler) {
+    int implicit_main_started = 0;
+    int explicit_function_seen = 0;
+
     while (compiler->lexer.current.type != TOK_EOF) {
-        if (compiler->lexer.current.type == TOK_STRUCT) {
+        if (compiler->lexer.current.type == TOK_STRUCT
+            || compiler->lexer.current.type == TOK_CLASS) {
             if (parse_struct_definition(compiler) != 0) {
                 return -1;
             }
@@ -4025,12 +4109,52 @@ static int parse_program(PrismCompiler* compiler) {
             continue;
         }
 
-        if (!token_is_decl_type(compiler->lexer.current.type)) {
-            compiler->error = "top-level items must use supported method return types";
+        if (token_is_decl_type(compiler->lexer.current.type)) {
+            Lexer saved_lexer = compiler->lexer;
+            next_token(compiler);
+            if (token_is_name(compiler->lexer.current.type)) {
+                next_token(compiler);
+            }
+            if (compiler->lexer.current.type == TOK_LPAREN) {
+                compiler->lexer = saved_lexer;
+                if (implicit_main_started) {
+                    if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0
+                        || emit_u32(compiler, 0U) != 0
+                        || emit_u8(compiler, BCVM_OP_RET) != 0) {
+                        return -1;
+                    }
+                    implicit_main_started = 0;
+                }
+                explicit_function_seen = 1;
+                if (parse_function(compiler) != 0) {
+                    return -1;
+                }
+                continue;
+            }
+            compiler->lexer = saved_lexer;
+        }
+
+        if (explicit_function_seen) {
+            compiler->error = "top-level statements must precede function definitions";
             return -1;
         }
 
-        if (parse_function(compiler) != 0) {
+        if (!implicit_main_started) {
+            compiler->main_entry = compiler->code_size;
+            compiler->local_count = 0;
+            compiler->current_function_return_type = (uint8_t)LOCAL_TYPE_INT;
+            implicit_main_started = 1;
+        }
+
+        if (parse_statement(compiler, 0) != 0) {
+            return -1;
+        }
+    }
+
+    if (implicit_main_started) {
+        if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0
+            || emit_u32(compiler, 0U) != 0
+            || emit_u8(compiler, BCVM_OP_RET) != 0) {
             return -1;
         }
     }

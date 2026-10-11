@@ -273,7 +273,7 @@ int app_manager_run_path(const char* app_abs_path, const char* args) {
     }
 
     if ((image.header.flags & PRISM_APP_FLAG_DRIVER) != 0U) {
-        ERROR_LOG("driver package rejected by app-run; use driver-run");
+        ERROR_LOG("driver package rejected as an app; use driver-run");
         return -1;
     }
 

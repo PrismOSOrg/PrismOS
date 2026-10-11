@@ -207,7 +207,7 @@ EOF
 Copy the generated app to PrismOS disk content (8.3 FAT name recommended), then run in PrismOS shell:
 
 ```text
-app-run /HELLO.APP
+/HELLO.APP
 ```
 
 ### Supported Subset
@@ -220,6 +220,37 @@ app-run /HELLO.APP
 	- `print_int(expr);`
 	- `return expr;`
 - Expressions: integer literals, variables, `+ - * /`, unary `-`, parentheses
+
+PrismCC also accepts script-style top-level statements; they are compiled into
+an implicit `main` function and must appear before explicit function
+definitions. Data-only classes use the same fixed-field model as structs:
+
+```text
+class Point {
+    int x;
+    int y;
+}
+
+int main() {
+    class Point point;
+    print_int(point.x);
+    return 0;
+}
+```
+
+The `system("command arguments");` statement runs a restricted built-in
+command and prints its normal PrismOS output in the guest. Only `help`, `drive`,
+`partitions`, `net`, `pwd`, and `ls` are allowed; shell metacharacters such as
+pipes, redirects, substitutions, and command chaining are rejected. It returns
+`0` for an allowed command and `-1` for a rejected command. This is intended
+for guest diagnostics, not arbitrary host shell execution.
+
+The class example is available at
+[examples/classes_prismcc.c](examples/classes_prismcc.c). The helper
+`python3 tools/build_prismcc_classes.py` builds the standalone host compiler
+and attempts to compile it. The standalone compiler still supports only the
+older app subset, so class sources must currently be compiled inside PrismOS
+with the in-OS `cc` command.
 
 The compiler emits Prism app containers with a BCVM bytecode payload, and PrismOS runs them through the in-kernel bytecode VM.
 
@@ -236,7 +267,7 @@ Example flow from PrismOS shell:
 ```text
 edit /HELLO.C
 cc /HELLO.C /HELLO.APP
-app-run /HELLO.APP
+/HELLO.APP
 ```
 
 This uses the same subset language as `prismcc` and compiles directly on the PrismOS filesystem.
@@ -266,7 +297,7 @@ PrismOS now auto-installs a built-in banking app package at boot:
 Run it from the shell with:
 
 ```text
-app-run /APPS/BANK.APP
+/APPS/BANK.APP
 ```
 
 The app stores accounts locally in:

@@ -14,6 +14,7 @@
 #define IDE_MAX_PATH 128U
 #define IDE_TAB_WIDTH 4U
 #define IDE_MAX_VISIBLE_ROWS 128U
+#define IDE_GUTTER_WIDTH 5U
 
 typedef struct {
     char path[IDE_MAX_PATH];
@@ -108,6 +109,34 @@ static uint32_t line_start_for_row(const EditorState* state, uint32_t row) {
     }
 
     return pos;
+}
+
+static uint32_t editor_line_count(const EditorState* state) {
+    uint32_t count = state->length == 0U ? 0U : 1U;
+
+    for (uint32_t index = 0U; index < state->length; index++) {
+        if (state->text[index] == '\n') {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+static void editor_move_bytes(char* destination, const char* source, uint32_t count) {
+    if (destination == source || count == 0U) {
+        return;
+    }
+
+    if (destination < source) {
+        for (uint32_t i = 0; i < count; i++) {
+            destination[i] = source[i];
+        }
+    } else {
+        for (uint32_t i = count; i > 0U; i--) {
+            destination[i - 1U] = source[i - 1U];
+        }
+    }
 }
 
 static uint32_t column_for_index(const EditorState* state, uint32_t index) {
@@ -403,6 +432,87 @@ static void editor_delete(EditorState* state) {
     state->modified = 1;
 }
 
+static void editor_duplicate_line(EditorState* state) {
+    uint32_t start = line_start_for_index(state, state->cursor);
+    uint32_t end = line_end_for_start(state, start);
+    uint32_t copy_end = end;
+    uint32_t line_length;
+    uint32_t column = state->cursor - start;
+
+    if (copy_end < state->length && state->text[copy_end] == '\n') {
+        copy_end++;
+    }
+    line_length = copy_end - start;
+    if (line_length == 0U || state->length + line_length > IDE_MAX_TEXT) {
+        return;
+    }
+
+    for (uint32_t i = state->length + 1U; i > copy_end; i--) {
+        state->text[i + line_length - 1U] = state->text[i - 1U];
+    }
+    for (uint32_t i = 0; i < line_length; i++) {
+        state->text[copy_end + i] = state->text[start + i];
+    }
+    state->length += line_length;
+    state->cursor = copy_end + column;
+    if (state->cursor > copy_end + line_length) {
+        state->cursor = copy_end + line_length;
+    }
+    state->text[state->length] = '\0';
+    state->modified = 1;
+}
+
+static void editor_move_line(EditorState* state, int direction) {
+    static char line_buffer[IDE_MAX_TEXT + 1U];
+    uint32_t start = line_start_for_index(state, state->cursor);
+    uint32_t end = line_end_for_start(state, start);
+    uint32_t segment_end = end;
+    uint32_t column = state->cursor - start;
+    uint32_t other_start;
+    uint32_t other_end;
+    uint32_t line_length;
+    uint32_t other_length;
+
+    if (segment_end < state->length && state->text[segment_end] == '\n') {
+        segment_end++;
+    }
+    if (direction < 0) {
+        if (start == 0U) {
+            return;
+        }
+        other_start = line_start_for_index(state, start - 1U);
+        other_end = start;
+    } else {
+        if (segment_end >= state->length) {
+            return;
+        }
+        other_start = segment_end;
+        other_end = line_end_for_start(state, other_start);
+        if (other_end < state->length && state->text[other_end] == '\n') {
+            other_end++;
+        }
+    }
+
+    line_length = segment_end - start;
+    other_length = other_end - other_start;
+    memcpy(line_buffer, &state->text[start], line_length);
+
+    if (direction < 0) {
+        editor_move_bytes(&state->text[other_start + line_length],
+            &state->text[other_start], other_length);
+        memcpy(&state->text[other_start], line_buffer, line_length);
+        state->cursor = other_start + column;
+    } else {
+        editor_move_bytes(&state->text[start], &state->text[segment_end],
+            other_length);
+        memcpy(&state->text[start + other_length], line_buffer, line_length);
+        state->cursor = start + other_length + column;
+    }
+
+    state->modified = 1;
+    state->preferred_col = column;
+}
+
 static void editor_move_vertical(EditorState* state, int direction) {
     uint32_t current_start = line_start_for_index(state, state->cursor);
     uint32_t current_col = state->cursor - current_start;
@@ -558,7 +668,7 @@ const char* keywords[] = {
     "double", "else", "enum", "extern", "float", "for", "goto", "if",
     "inline", "int", "long", "register", "restrict", "return", "short", "signed",
     "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void",
-    "volatile", "while"
+    "volatile", "while", "class"
 };
 
 static const uint32_t keyword_count = sizeof(keywords) / sizeof(keywords[0]);
@@ -608,6 +718,25 @@ static void draw_span(const EditorState* state, uint32_t start, uint32_t end, ui
     }
 }
 
+static void draw_line_number(uint32_t line, uint32_t screen_row) {
+    uint32_t value = line + 1U;
+    uint32_t digits = 1U;
+    uint32_t divisor = 10U;
+
+    while (value >= divisor) {
+        digits++;
+        divisor *= 10U;
+    }
+
+    console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+    console_set_cursor(0, (int)screen_row);
+    for (uint32_t i = digits; i < IDE_GUTTER_WIDTH - 1U; i++) {
+        console_write_char(' ');
+    }
+    console_write_uint(value);
+    console_write_char(' ');
+}
+
 static uint32_t find_line_end(const EditorState* state, uint32_t start) {
     uint32_t pos = start;
 
@@ -640,6 +769,7 @@ static uint32_t consume_string_literal(const EditorState* state, uint32_t start,
 
 static void draw_text_area(EditorState* state, uint32_t columns, uint32_t rows, int force_redraw) {
     uint32_t visible_rows = rows - 2U;
+    uint32_t line_count = editor_line_count(state);
     uint32_t line_start = line_start_for_row(state, state->scroll_row);
     int in_block_comment = 0;
 
@@ -654,6 +784,12 @@ static void draw_text_area(EditorState* state, uint32_t columns, uint32_t rows, 
         uint32_t signature = compute_row_signature(state, line_start, columns, in_block_comment);
         int row_changed = force_redraw;
 
+        /* The gutter changes when a newline creates or removes a logical line,
+         * even when the line's text remains empty and its content signature
+         * is unchanged. */
+        signature ^= line_count;
+        signature *= 16777619U;
+
         if (r >= IDE_MAX_VISIBLE_ROWS) {
             row_changed = 1;
         } else if (!row_changed) {
@@ -662,7 +798,11 @@ static void draw_text_area(EditorState* state, uint32_t columns, uint32_t rows, 
 
         if (row_changed) {
             console_clear_row((int)row_y);
-            console_set_cursor(0, (int)row_y);
+            if (state->scroll_row + r < line_count) {
+                draw_line_number(state->scroll_row + r, row_y);
+            }
+            console_set_cursor((int)IDE_GUTTER_WIDTH, (int)row_y);
+            console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
         }
 
         while (pos < line_end && col < columns) {
@@ -938,7 +1078,7 @@ static void draw_selection(EditorState* state, uint32_t columns, uint32_t rows) 
         uint32_t col;
         cursor_metrics_for_index(state, i, &row, &col);
         if (state->text[i] != '\n' && row >= state->scroll_row && row - state->scroll_row < rows - 2U && col < columns) {
-            console_set_cursor((int)col, (int)(row - state->scroll_row + 1U));
+            console_set_cursor((int)(col + IDE_GUTTER_WIDTH), (int)(row - state->scroll_row + 1U));
             console_write_char(state->text[i]);
         }
     }
@@ -995,7 +1135,7 @@ static void draw_editor(EditorState* state, int text_dirty) {
         uint32_t local_row = cursor_row - state->scroll_row;
         if (local_row < (rows - 2U) && cursor_col < columns) {
             console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
-            console_set_cursor((int)cursor_col, (int)(local_row + 1U));
+            console_set_cursor((int)(cursor_col + IDE_GUTTER_WIDTH), (int)(local_row + 1U));
         }
     }
 
@@ -1219,6 +1359,18 @@ int ide_app_run(const char* abs_path) {
                 handle_exit_prompt(&state);
                 state.full_redraw = 1;
                 text_dirty = 1;
+            } else if ((event.modifiers & KEY_MOD_CTRL) != 0U
+                && (event.character == 'a' || event.character == 'A')) {
+                state.selection_anchor = 0U;
+                state.cursor = state.length;
+                state.preferred_col = column_for_index(&state, state.cursor);
+                state.full_redraw = 1;
+            } else if ((event.modifiers & KEY_MOD_CTRL) != 0U
+                && (event.character == 'd' || event.character == 'D')) {
+                editor_duplicate_line(&state);
+                state.preferred_col = column_for_index(&state, state.cursor);
+                state.full_redraw = 1;
+                text_dirty = 1;
             } else if (event.character == '\t') {
                 editor_insert_tab(&state);
                 state.preferred_col = column_for_index(&state, state.cursor);
@@ -1272,13 +1424,23 @@ int ide_app_run(const char* abs_path) {
                 break;
             case KEY_EVENT_UP:
                 state.selection_anchor = 0xFFFFFFFFU;
-                editor_move_vertical(&state, -1);
+                if ((event.modifiers & KEY_MOD_ALT) != 0U) {
+                    editor_move_line(&state, -1);
+                } else {
+                    editor_move_vertical(&state, -1);
+                }
                 state.full_redraw = 1;
+                text_dirty = 1;
                 break;
             case KEY_EVENT_DOWN:
                 state.selection_anchor = 0xFFFFFFFFU;
-                editor_move_vertical(&state, 1);
+                if ((event.modifiers & KEY_MOD_ALT) != 0U) {
+                    editor_move_line(&state, 1);
+                } else {
+                    editor_move_vertical(&state, 1);
+                }
                 state.full_redraw = 1;
+                text_dirty = 1;
                 break;
             case KEY_EVENT_HOME:
                 state.selection_anchor = 0xFFFFFFFFU;

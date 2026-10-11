@@ -23,6 +23,7 @@
 #include "apps/prismcc_runtime.h"
 
 #define COMMAND_PATH_CAPACITY 128
+#define COMMAND_NAME_CAPACITY 128
 #define COMMAND_TOKEN_CAPACITY 64
 #define COMMAND_TEXT_CAPACITY 512
 #define COMMAND_MOVE_BUFFER_CAPACITY 4096
@@ -84,7 +85,6 @@ static void command_write(const char* arguments);
 static void command_append(const char* arguments);
 static void command_edit(const char* arguments);
 static void command_ide(const char* arguments);
-static void command_app_run(const char* arguments);
 static void command_cc(const char* arguments);
 static void command_driver_run(const char* arguments);
 static void command_driver_start(const char* arguments);
@@ -164,7 +164,6 @@ static int resolve_to_absolute_path(const char* input_path, char* output_path, u
 // One registry powers execution and help output, so adding commands stays local.
 static const Command commands[] = {
     {{"about", "Shows the PrismOS version, execution mode, and detected memory information.", "about", "None.", "about"}, command_about},
-    {{"app-run", "Loads and runs a Prism app package from the active drive. Optional trailing text is passed to the app runtime.", "app-run <path> [args]", "path: app package path. args: optional argument text passed to the app.", "app-run /APPS/BANK.APP"}, command_app_run},
     {{"append", "Adds text to the end of an existing file. The text is stored as provided; this command does not add a newline.", "append <path> <text>", "path: destination file path. text: all remaining text after the path token.", "append /NOTES.TXT More text"}, command_append},
     {{"cat", "Reads a text file and prints its contents. Output is limited by the shell command's text buffer.", "cat <path>", "path: file path to read.", "cat /README.TXT"}, command_cat},
     {{"cc", "Compiles supported PrismCC source into an app package, or into a cooperative driver package when the output uses the .pdr suffix.", "cc <input.c> <output.app|output.pdr>", "input.c: source file path. output.app: app destination. output.pdr: driver destination; requires the driver lifecycle functions.", "cc /SERDRV.C /DRIVERS/SERIAL.PDR"}, command_cc},
@@ -1423,26 +1422,6 @@ static void command_ide(const char* arguments) {
     }
 }
 
-static void command_app_run(const char* arguments) {
-    char token[COMMAND_TOKEN_CAPACITY];
-    char absolute[COMMAND_PATH_CAPACITY];
-    const char* remainder = 0;
-
-    if (parse_token(arguments, token, sizeof(token), &remainder) != 0) {
-        console_writeln("Usage: app-run <path> [args]");
-        return;
-    }
-
-    if (resolve_to_absolute_path(token, absolute, sizeof(absolute)) != 0) {
-        console_writeln("Invalid path");
-        return;
-    }
-
-    if (app_manager_run_path(absolute, remainder) != 0) {
-        console_writeln("app execution failed");
-    }
-}
-
 static void command_pkg(const char* arguments) {
     char operation[COMMAND_TOKEN_CAPACITY];
     const char* remainder = 0;
@@ -1594,7 +1573,7 @@ void command_print_help(void) {
 }
 
 void command_execute(const char* line) {
-    char command_name[16];
+    char command_name[COMMAND_NAME_CAPACITY];
     const char* arguments;
     int index = 0;
 
@@ -1621,6 +1600,25 @@ void command_execute(const char* line) {
     }
 
     WARNINIG_LOG("unknown command entered");
+    {
+        unsigned int name_length = string_length(command_name);
+        int is_app = name_length >= 4U
+            && command_name[name_length - 4U] == '.'
+            && (command_name[name_length - 3U] == 'a' || command_name[name_length - 3U] == 'A')
+            && (command_name[name_length - 2U] == 'p' || command_name[name_length - 2U] == 'P')
+            && (command_name[name_length - 1U] == 'p' || command_name[name_length - 1U] == 'P');
+
+        if (is_app) {
+            char absolute[COMMAND_PATH_CAPACITY];
+            if (resolve_to_absolute_path(command_name, absolute, sizeof(absolute)) == 0) {
+                if (app_manager_run_path(absolute, arguments) == 0) {
+                    return;
+                }
+                console_writeln("app execution failed");
+                return;
+            }
+        }
+    }
     console_write("Unknown command: ");
     console_writeln(command_name);
 }

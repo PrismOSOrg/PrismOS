@@ -95,6 +95,14 @@ static void shell_clear_selection(void) {
     shell.selection_anchor = -1;
 }
 
+static void shell_refresh_line(void);
+
+static void shell_select_all(void) {
+    shell.selection_anchor = 0;
+    shell.cursor = shell.length;
+    shell_refresh_line();
+}
+
 static void shell_insert_char(char c);
 
 static int shell_selection_start(void) {
@@ -357,6 +365,12 @@ static void shell_show_prompt(void) {
 static void shell_handle_event(KeyEvent event) {
     if (event.type == KEY_EVENT_CHARACTER) {
         if (event.character == 27) {
+            return;
+        }
+
+        if ((event.modifiers & KEY_MOD_CTRL) != 0U
+            && (event.character == 'a' || event.character == 'A')) {
+            shell_select_all();
             return;
         }
 

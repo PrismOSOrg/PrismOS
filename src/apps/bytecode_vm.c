@@ -8,6 +8,7 @@
 #include "drivers/driver_api.h"
 #include "filesystem/vfs.h"
 #include "input/keyboard.h"
+#include "commands/command.h"
 
 #define BCVM_STACK_MAX 256U
 #define BCVM_LOCALS_MAX 512U
@@ -78,6 +79,57 @@ static BytecodeVmContext* active_vm_context;
 #define vm_file_text_buffer (active_vm_context->file_text_buffer)
 
 #define VM_STRING_DESC_HEAP_MASK 0x80000000U
+
+static int vm_system_command_allowed(const char* command, uint16_t length) {
+    uint16_t first_end = 0;
+    const char* allowed[] = {"help", "drive", "partitions", "net", "pwd", "ls"};
+    int matched = 0;
+
+    while (first_end < length && command[first_end] != ' ') {
+        if (command[first_end] == ';' || command[first_end] == '|'
+            || command[first_end] == '&' || command[first_end] == '>'
+            || command[first_end] == '<' || command[first_end] == '`') {
+            return 0;
+        }
+        first_end++;
+    }
+
+    if (first_end == 0U) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
+        uint32_t allowed_length = 0;
+        while (allowed[i][allowed_length] != '\0') {
+            allowed_length++;
+        }
+        if (allowed_length == first_end) {
+            matched = 1;
+            for (uint16_t j = 0; j < first_end; j++) {
+                if (command[j] != allowed[i][j]) {
+                    matched = 0;
+                    break;
+                }
+            }
+            if (matched) {
+                break;
+            }
+        }
+    }
+
+    if (!matched) {
+        return 0;
+    }
+
+    for (uint16_t i = first_end; i < length; i++) {
+        char c = command[i];
+        if (c == ';' || c == '|' || c == '&' || c == '>'
+            || c == '<' || c == '`') {
+            return 0;
+        }
+    }
+    return 1;
+}
 
 static uint32_t vm_make_heap_string_descriptor(uint8_t slot) {
     return VM_STRING_DESC_HEAP_MASK | (uint32_t)slot;
@@ -873,6 +925,35 @@ static int bytecode_vm_run_context(const uint8_t* image, uint32_t image_size,
                 for (uint32_t i = 0; i < (uint32_t)length; i++) {
                     console_write_char((char)data[offset + i]);
                 }
+                break;
+            }
+            case BCVM_OP_SYSTEM: {
+                const char* command;
+                uint16_t command_length;
+                int result = -1;
+
+                if (sp == 0U
+                    || vm_resolve_string_descriptor((uint32_t)stack[--sp],
+                        data, &header, &command, &command_length) != 0) {
+                    return -1;
+                }
+
+                if (vm_system_command_allowed(command, command_length)) {
+                    char command_buffer[BCVM_INPUT_MAX + 1U];
+                    if ((uint32_t)command_length + 1U <= sizeof(command_buffer)) {
+                        for (uint16_t i = 0; i < command_length; i++) {
+                            command_buffer[i] = command[i];
+                        }
+                        command_buffer[command_length] = '\0';
+                        command_execute(command_buffer);
+                        result = 0;
+                    }
+                }
+
+                if (sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+                stack[sp++] = result;
                 break;
             }
             case BCVM_OP_PRINT_INT: {

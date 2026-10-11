@@ -21,6 +21,7 @@ typedef enum {
 
 #define KEY_MOD_SHIFT 0x01U
 #define KEY_MOD_CTRL  0x02U
+#define KEY_MOD_ALT   0x04U
 
 typedef struct {
     KeyEventType type;

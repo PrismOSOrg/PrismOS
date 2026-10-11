@@ -75,6 +75,7 @@ static void keyboard_irq_handler(registers_t *regs)
     static int extended_prefix = 0;
     static int shift_pressed   = 0;
     static int ctrl_pressed    = 0;
+    static int alt_pressed     = 0;
     static int caps_lock       = 0;
     static int first_invocation = 1;
 
@@ -106,15 +107,23 @@ static void keyboard_irq_handler(registers_t *regs)
         if (key == 29) { /* left/right control */
             ctrl_pressed = 0;
         }
+        if (key == 56) { /* left/right alt */
+            alt_pressed = 0;
+        }
         extended_prefix = 0;
         return;
     }
 
     if (extended_prefix) {
         extended_prefix = 0;
+        if (scancode == 0x38) {
+            alt_pressed = 1;
+            return;
+        }
         KeyEvent ev = {KEY_EVENT_NONE, 0, 0};
         ev.modifiers = (uint8_t)((shift_pressed ? KEY_MOD_SHIFT : 0U)
-            | (ctrl_pressed ? KEY_MOD_CTRL : 0U));
+            | (ctrl_pressed ? KEY_MOD_CTRL : 0U)
+            | (alt_pressed ? KEY_MOD_ALT : 0U));
         switch (scancode) {
             case 0x48: ev.type = KEY_EVENT_UP;     break;
             case 0x50: ev.type = KEY_EVENT_DOWN;   break;
@@ -132,6 +141,7 @@ static void keyboard_irq_handler(registers_t *regs)
     kb_key_pressed[scancode] = 1U;
     if (scancode == 42 || scancode == 54) { shift_pressed = 1; return; }
     if (scancode == 29) { ctrl_pressed = 1; return; }
+    if (scancode == 56) { alt_pressed = 1; return; }
     if (scancode == 58) { caps_lock = !caps_lock; return; }
     if (scancode == 14) { kb_queue_push((KeyEvent){KEY_EVENT_BACKSPACE, 0, 0}); return; }
     if (scancode == 28) { kb_queue_push((KeyEvent){KEY_EVENT_ENTER, 0, 0}); return; }
@@ -156,7 +166,8 @@ static void keyboard_irq_handler(registers_t *regs)
 
     kb_queue_push((KeyEvent){KEY_EVENT_CHARACTER, character,
         (uint8_t)((shift_pressed ? KEY_MOD_SHIFT : 0U)
-            | (ctrl_pressed ? KEY_MOD_CTRL : 0U))});
+            | (ctrl_pressed ? KEY_MOD_CTRL : 0U)
+            | (alt_pressed ? KEY_MOD_ALT : 0U))});
 }
 
 /* -------------------------------------------------------------------------

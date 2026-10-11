@@ -84,6 +84,11 @@ $(BUILD)/partition_manager.o \
 $(BUILD)/fat32.o \
 $(BUILD)/vfs.o
 
+BUILTIN_APP_OBJS = \
+$(BUILD)/bank_app.o \
+$(BUILD)/editor_app.o \
+$(BUILD)/ide_app.o
+
 APP_OBJS = \
 $(BUILD)/app_loader.o \
 $(BUILD)/app_runtime.o \
@@ -96,9 +101,6 @@ $(BUILD)/network_manager_app.o \
 $(BUILD)/package_manager.o \
 $(BUILD)/package_manager_app.o \
 $(BUILD)/sha256.o \
-$(BUILD)/editor_app.o \
-$(BUILD)/ide_app.o \
-$(BUILD)/bank_app.o \
 $(BUILD)/app_manager.o
 
 # -------------------------
@@ -143,6 +145,15 @@ $(BUILD)/e1000.o: src/net/drivers/e1000.c | $(BUILD)
 $(BUILD)/%.o: src/apps/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/bank_app.o: src/apps/builtins/bank_app.c | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/editor_app.o: src/apps/builtins/editor_app.c | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ide_app.o: src/apps/builtins/ide_app.c | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
 $(BUILD)/user_driver_vm.o: src/apps/user_driver_vm.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -fno-inline -fno-jump-tables \
 		-fno-tree-switch-conversion -fno-builtin -c $< -o $@
@@ -181,6 +192,7 @@ $(MEMORY_OBJS) \
 $(DRIVER_OBJS) \
 $(NETWORK_OBJS) \
 $(FS_OBJS) \
+$(BUILTIN_APP_OBJS) \
 $(APP_OBJS)
 
 kernel.elf: $(KERNEL_OBJS) boot/linker.ld
@@ -198,10 +210,29 @@ os.iso: kernel.elf boot/grub.cfg
 # -------------------------
 # Disk
 # -------------------------
-$(BUILD)/disk.img:
+BUILTIN_APP_OUTPUTS = \
+$(BUILD)/APPS/BANK.APP \
+$(BUILD)/APPS/EDITOR.APP \
+$(BUILD)/APPS/IDE.APP
+
+$(BUILD)/APPS:
+	mkdir -p $@
+
+$(BUILD)/APPS/BANK.APP: | $(BUILD)/APPS
+	python3 -c "import struct,sys; out_path, app_id = sys.argv[1], sys.argv[2].encode('ascii'); payload = app_id.ljust(6, b'\0')[:6]; header = struct.pack('<IHHIII', 0x50524953, 1, 0, 0, len(payload), 0); f = open(out_path, 'wb'); f.write(header); f.write(payload); f.close()" "$@" "BANK"
+
+$(BUILD)/APPS/EDITOR.APP: | $(BUILD)/APPS
+	python3 -c "import struct,sys; out_path, app_id = sys.argv[1], sys.argv[2].encode('ascii'); payload = app_id.ljust(6, b'\0')[:6]; header = struct.pack('<IHHIII', 0x50524953, 1, 0, 0, len(payload), 0); f = open(out_path, 'wb'); f.write(header); f.write(payload); f.close()" "$@" "EDITOR"
+
+$(BUILD)/APPS/IDE.APP: | $(BUILD)/APPS
+	python3 -c "import struct,sys; out_path, app_id = sys.argv[1], sys.argv[2].encode('ascii'); payload = app_id.ljust(6, b'\0')[:6]; header = struct.pack('<IHHIII', 0x50524953, 1, 0, 0, len(payload), 0); f = open(out_path, 'wb'); f.write(header); f.write(payload); f.close()" "$@" "IDE"
+
+$(BUILD)/disk.img: $(BUILTIN_APP_OUTPUTS)
 	truncate -s 64M $@
 	printf 'label: dos\nunit: sectors\n\nstart=2048, size=129024, type=c, bootable\n' | sfdisk $@
 	mkfs.fat -F 32 -n PRISMOS --offset=2048 $@
+	mmd -i $@@@1048576 ::/APPS
+	mcopy -i $@@@1048576 -s $(BUILD)/APPS/*.APP ::/APPS/
 
 $(BUILD)/disk-secondary.img:
 	truncate -s 2G $@

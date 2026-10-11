@@ -637,6 +637,12 @@ int editor_app_run(const char* abs_path) {
                 handle_exit_prompt(&state);
                 state.full_redraw = 1;
                 text_dirty = 1;
+            } else if ((event.modifiers & KEY_MOD_CTRL) != 0U
+                && (event.character == 'a' || event.character == 'A')) {
+                state.selection_anchor = 0U;
+                state.cursor = state.length;
+                state.preferred_col = column_for_index(&state, state.cursor);
+                state.full_redraw = 1;
             } else if (event.character == '\t') {
                 editor_insert(&state, ' ');
                 editor_insert(&state, ' ');

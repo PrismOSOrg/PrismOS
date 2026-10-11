@@ -126,7 +126,9 @@ Notes:
 - `read_text()`
 - `read_text(promptStringExpr)`
 - `input_int()`
-- `app_read_key()` -> blocks for one key and returns its character, newline, backspace, or `-1` for an unsupported key
+- `read_key()` -> blocks for one key and returns its character, newline, backspace, or `-1` for an unsupported key; the integer result can be used directly in conditions
+- Built-in key constants include `KEY_A` through `KEY_Z`, `KEY_0` through `KEY_9`, `KEY_ENTER`, `KEY_ESCAPE`, `KEY_BACKSPACE`, `KEY_TAB`, and `KEY_SPACE`.
+- `read_key()` -> blocks for one key and returns its character, newline, backspace, or `-1` for an unsupported key
 - `app_wait_key_release(key)` -> blocks until a physical key is released, yielding time to resident drivers while it waits; returns `0` if Escape was pressed instead
 - `driver_service_call(driverId, operation, argument0, argument1)` -> synchronously calls a resident PrismCC driver's exported service and returns its integer result, or `-1` if unavailable/failed
 - `driver_service_find(serviceType)` -> returns the first running resident driver that accepts service-discovery operation `0` with the given service type, or `-1` if none is available
@@ -163,7 +165,7 @@ driver-list
 driver-stop 1
 ```
 
-Driver sources must define zero-argument `int driver_init()`, `void driver_poll()`, `void driver_shutdown()`, and `int main()` functions. `driver-start` runs the three lifecycle callbacks as a resident service; `driver-list` shows active IDs and states; `driver-stop <id>` requests shutdown. A resident driver that polls `driver_should_stop()` is also shut down when Esc is pressed; the check leaves non-Escape keyboard events queued for the shell or foreground app. `driver-run` remains a synchronous foreground mode in which `main()` owns the lifecycle. The compiler validates the entry points and sets the driver package flag; `app-run` refuses driver packages.
+Driver sources must define zero-argument `int driver_init()`, `void driver_poll()`, `void driver_shutdown()`, and `int main()` functions. `driver-start` runs the three lifecycle callbacks as a resident service; `driver-list` shows active IDs and states; `driver-stop <id>` requests shutdown. A resident driver that polls `driver_should_stop()` is also shut down when Esc is pressed; the check leaves non-Escape keyboard events queued for the shell or foreground app. `driver-run` remains a synchronous foreground mode in which `main()` owns the lifecycle. The compiler validates the entry points and sets the driver package flag; driver packages cannot be launched as applications.
 
 Any resident driver may additionally export `int driver_service(int operation, int argument0, int argument1)`. Apps call it with `driver_service_call(driverId, operation, argument0, argument1)`; the driver ID is the one shown by `driver-list`. For discovery, a driver should return `1` for operation `0` when `argument0` matches one of its service-type identifiers, and `0` otherwise. Apps use `driver_service_find(serviceType)` to find the first matching running driver. The callback runs synchronously in that driver's isolated VM context and returns an integer to the app. A driver without this optional callback remains usable through its lifecycle but has no app-callable service. Legacy packages with 16-byte lifecycle tables remain loadable; recompile a package to include the optional service entry. Each callback is bounded to 256 VM slices, and a callback that exceeds that limit is stopped.
 
@@ -207,7 +209,7 @@ cc /AC97.C /DRIVERS/AC97.PDR
 driver-start /DRIVERS/AC97.PDR
 driver-list
 cc /PIANO.C /APPS/PIANO.APP
-app-run /APPS/PIANO.APP
+/APPS/PIANO.APP
 ```
 
 The piano automatically discovers the running audio driver. Play with `Z X C V B N M ,` (white keys) and `S D G H J` (black keys), and press Escape to exit. Stop the driver afterward with `driver-stop <id>`.
@@ -259,7 +261,7 @@ VM-side limits:
 2. Compile in PrismOS shell:
    - `cc /path/program.c /path/program.app`
 3. Run app:
-   - `app-run /path/program.app`
+   - `/path/program.app`
 
 ### Small Standard Library (Headers)
 
