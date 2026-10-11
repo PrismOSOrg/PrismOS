@@ -507,7 +507,7 @@ static void draw_title_bar(const EditorState* state) {
     console_set_color(COLOR_WHITE, COLOR_DARK_GRAY);
     console_clear_row(0);
     console_set_cursor(0, 0);
-    console_write(" Prism IDE  ");
+    console_write(" PrismIDE  ");
     console_write(state->path);
     if (state->modified) {
         console_write("  [modified]");

@@ -2,7 +2,7 @@
 
 PrismOS is a small hobby operating system that boots via GRUB and runs on x86 hardware (or in QEMU). It provides a simple framebuffer console, a basic shell, and a handful of built-in commands.
 
-## Quick build & run
+## Build & Run
 
 Install the build dependencies (example for Debian/Ubuntu):
 
@@ -13,19 +13,24 @@ sudo apt-get install build-essential nasm gcc-multilib xorriso qemu-system-x86 q
 Build and run:
 
 ```shell
-make run           # build (if needed) and boot the ISO in QEMU
+make run           # build and boot with VHDX, e1000 user networking, and live COM1 output
 ```
 
 Other useful targets:
 
 ```shell
 make clean         # remove build artifacts
-make run-serial    # boot and mirror COM1 to your terminal
-make run-serial-log # boot and save COM1 output to build/serial.log
-make run-vhdx      # convert the test disk to VHDX and boot it in QEMU
-make run-secondary # attach a separate 2 GiB FAT32 IDE disk for drive-switch testing
-make run-net       # attach a QEMU e1000 NIC with user-mode networking
-make run-net-serial # same network setup with COM1 debug output
+make run-serial-log # same setup, saving COM1 output to build/serial.log
+make run-secondary # standard setup plus a separate 2 GiB FAT32 IDE disk
+```
+
+The following targets are retained as legacy, specialized launch modes:
+
+```shell
+make run-serial    # boot the raw-disk setup and mirror COM1 to your terminal
+make run-vhdx      # boot the VHDX setup without the standard network device
+make run-net       # boot the raw-disk setup with an e1000 user network
+make run-net-serial # raw-disk network setup with COM1 debug output
 make run-ac97      # attach the QEMU Intel AC'97 device (silent audio backend)
 ```
 
@@ -36,8 +41,8 @@ Clipboard sharing:
 
 Notes:
 - The build uses 32-bit compilation flags (gcc -m32). Ensure you have multilib support installed.
-- `make run` launches QEMU for quick testing; you can also boot `build/os.iso` in a BIOS-mode VM.
-- `make run-serial` launches QEMU with debug logs. If you are running bare-metal use serial port.
+- `make run` launches QEMU with the generated VHDX disk, an e1000 user-mode network, and live COM1 output in the terminal; it does not save a log file.
+- `make run-serial-log` launches the same setup with COM1 output in `build/serial.log`.
 
 If you want a reproducible cross-toolchain build, replace the host `gcc` invocations with an i686-elf cross-compiler and adjust the Makefile accordingly.
 
@@ -75,15 +80,17 @@ test image is created as an MBR disk with a FAT32 partition; whole-disk FAT32
 images remain supported for compatibility.
 
 QEMU can use VHDX containers without any VHDX parsing in the kernel: QEMU
-exposes the container as the same emulated IDE disk. `make run-vhdx` converts
-the generated raw test disk into `build/disk.vhdx` and boots from it. To attach
-an existing VHDX instead, set `QEMU_DISK_IMAGE` and `QEMU_DISK_FORMAT`, for
-example `make run QEMU_DISK_IMAGE=/path/to/disk.vhdx QEMU_DISK_FORMAT=vhdx`.
+exposes the container as the same emulated IDE disk. `make run` converts the
+generated raw test disk into `build/disk.vhdx` and boots from it with the
+standard e1000 user-mode network. To attach an existing VHDX instead, use the
+legacy targets with `QEMU_DISK_IMAGE` and `QEMU_DISK_FORMAT`, for example
+`make run-vhdx QEMU_DISK_IMAGE=/path/to/disk.vhdx QEMU_DISK_FORMAT=vhdx`.
 Use a disposable image for testing because PrismOS writes to mounted FAT32
 volumes.
 
 `make run-secondary` creates a sparse `build/disk-secondary.img` with a 2 GiB
-MBR/FAT32 volume labeled `SECONDARY` and attaches it as the second IDE drive.
+MBR/FAT32 volume labeled `SECONDARY`, attaches it as the second IDE drive, and
+uses the same VHDX/e1000 setup as `make run`.
 In PrismOS, run `drive` to list physical drive indices, then `drive 1` to switch
 to the secondary disk and confirm the prompt shows `SECONDARY:/`. Both test
 images are writable and their contents persist between runs.
@@ -108,8 +115,8 @@ is active, to help prevent simultaneous access or accidental data deletion.
 ## Networking foundations
 
 The initial network driver supports the QEMU-compatible Intel e1000 adapter
-using PCI discovery and polled DMA rings. Start it with `make run-net` (or
-`make run-net-serial` to see boot diagnostics over COM1). The guest requests an
+using PCI discovery and polled DMA rings. Start it with `make run` (or
+`make run-serial-log` to save boot diagnostics over COM1). The guest requests an
 IPv4 lease from DHCP at startup. Run `net` (or `net ui`) to open the full-screen
 network manager. It shows live interface, address, DHCP, TCP, and traffic
 status. Use Up/Down plus Enter, number keys 1-9 or 0, or the displayed shortcuts
@@ -141,7 +148,7 @@ manifest SHA-256, validates the PrismOS app header, installs app files under
 at 64 KiB to fit current OS loader and memory limits. Favorites and installed
 package records are stored on the mounted drive. Start the server in
 `backendapi/` with `dotnet run --urls http://0.0.0.0:8080`, then boot with
-`make run-net`; QEMU's guest reaches the host at `10.0.2.2`. In the UI, use
+`make run`; QEMU's guest reaches the host at `10.0.2.2`. In the UI, use
 Up/Down to select, Enter for details, I to install, U twice to uninstall, F to
 favorite, R to refresh, and Esc/Q to exit. The repository uses plain HTTP and
 does not authenticate packages: SHA-256 detects transfer mismatches but does

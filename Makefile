@@ -220,22 +220,29 @@ check-disk-unmounted:
 		exit 1; \
 	fi
 
-run: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
-	$(QEMU) $(QEMU_FLAGS)
+run: QEMU_DISK_IMAGE=$(BUILD)/disk.vhdx
+run: QEMU_DISK_FORMAT=vhdx
+run: check-disk-unmounted os.iso $(BUILD)/disk.vhdx
+	$(QEMU) $(QEMU_FLAGS) -netdev user,id=net0 -device e1000,netdev=net0 -serial stdio
 
 run-serial: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
 	$(QEMU) $(QEMU_FLAGS) -serial stdio
 
-run-serial-log: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
-	$(QEMU) $(QEMU_FLAGS) -serial file:$(BUILD)/serial.log
+run-serial-log: QEMU_DISK_IMAGE=$(BUILD)/disk.vhdx
+run-serial-log: QEMU_DISK_FORMAT=vhdx
+run-serial-log: check-disk-unmounted os.iso $(BUILD)/disk.vhdx
+	$(QEMU) $(QEMU_FLAGS) -netdev user,id=net0 -device e1000,netdev=net0 -serial file:$(BUILD)/serial.log
 
 run-vhdx: QEMU_DISK_IMAGE=$(BUILD)/disk.vhdx
 run-vhdx: QEMU_DISK_FORMAT=vhdx
 run-vhdx: check-disk-unmounted os.iso $(BUILD)/disk.vhdx
 	$(QEMU) $(QEMU_FLAGS)
 
-run-secondary: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE) $(BUILD)/disk-secondary.img
-	$(QEMU) $(QEMU_FLAGS) -drive file=$(BUILD)/disk-secondary.img,format=raw,if=ide,index=1,media=disk
+run-secondary: QEMU_DISK_IMAGE=$(BUILD)/disk.vhdx
+run-secondary: QEMU_DISK_FORMAT=vhdx
+run-secondary: check-disk-unmounted os.iso $(BUILD)/disk.vhdx $(BUILD)/disk-secondary.img
+	$(QEMU) $(QEMU_FLAGS) -drive file=$(BUILD)/disk-secondary.img,format=raw,if=ide,index=1,media=disk \
+		-netdev user,id=net0 -device e1000,netdev=net0
 
 run-net: check-disk-unmounted os.iso $(QEMU_DISK_IMAGE)
 	$(QEMU) $(QEMU_FLAGS) -netdev user,id=net0 -device e1000,netdev=net0
